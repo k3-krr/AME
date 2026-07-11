@@ -149,11 +149,13 @@ class SQLMessageRepository(IMessageRepository):
     async def create(
         self, conversation_id: uuid.UUID, sender_role: str, content: str, memory_status: str = "pending"
     ) -> MessageTable:
+        from datetime import datetime, timezone
         message = MessageTable(
             conversation_id=conversation_id,
             sender_role=sender_role,
             content=content,
             memory_status=memory_status,
+            created_at=datetime.now(timezone.utc),
         )
         self.session.add(message)
         await self.session.flush()

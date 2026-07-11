@@ -1,7 +1,8 @@
 import logging
 import sys
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, status
+from fastapi import FastAPI, status, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -92,8 +93,43 @@ async def health_check():
 
 
 # Exception handler hooks
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    """Formats standard HTTPExceptions into unified API error payload format."""
+    error_codes = {
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "RESOURCE_NOT_FOUND",
+        422: "VALIDATION_ERROR",
+    }
+    error_code = error_codes.get(exc.status_code, "HTTP_ERROR")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": error_code,
+            "message": exc.detail,
+            "details": None
+        }
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    """Formats request schema Pydantic validation errors into unified API error payload format."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error_code": "VALIDATION_ERROR",
+            "message": "Request validation failed.",
+            "details": {"errors": exc.errors()}
+        }
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc: Exception):
+    """Fallback handler catching unhandled exceptions and wrapping them in standard JSON structure."""
     logger.error(f"Unhandled error occurred at request {request.url.path}: {str(exc)}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

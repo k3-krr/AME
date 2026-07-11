@@ -1,9 +1,20 @@
 import uuid
-from datetime import datetime, timezone
+import logging
 from typing import List, Optional
-from fastapi import APIRouter, status, Query, Response
+from fastapi import APIRouter, status, Query, Response, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.infrastructure.db.session import get_db
+from app.presentation.api.auth import get_current_user
+from app.infrastructure.db.models import UserTable
+from app.infrastructure.repositories.sql_repos import (
+    SQLConversationRepository,
+    SQLMessageRepository,
+)
+from app.infrastructure.services.memory_service import MemoryService
+from app.infrastructure.clients.llm_client import LLMService
+from app.application.chat_service import ChatService
 from app.presentation.api.schemas import (
     ConversationCreateRequest,
     ConversationResponse,
@@ -12,7 +23,25 @@ from app.presentation.api.schemas import (
     StandardErrorResponse,
 )
 
+logger = logging.getLogger("ame_backend.api.chat")
+
 router = APIRouter(tags=["chat"])
+
+# Instantiate singletons for infrastructure services
+memory_service_impl = MemoryService()
+llm_service_impl = LLMService()
+
+
+def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
+    """Dependency helper instantiating ChatService with standard database repositories."""
+    conversation_repo = SQLConversationRepository(db)
+    message_repo = SQLMessageRepository(db)
+    return ChatService(
+        conversation_repo=conversation_repo,
+        message_repo=message_repo,
+        llm_service=llm_service_impl,
+        memory_service=memory_service_impl,
+    )
 
 
 @router.get(
@@ -28,20 +57,23 @@ router = APIRouter(tags=["chat"])
 async def list_conversations(
     page: int = Query(1, ge=1, description="Page number for pagination"),
     limit: int = Query(20, ge=1, le=100, description="Number of conversations to return per page"),
+    current_user: UserTable = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     """
     Retrieves a paginated list of conversations belonging to the authenticated user.
     """
-    # Stub response matching ConversationResponse schema structure
-    return [
-        ConversationResponse(
-            id=uuid.uuid4(),
-            title="Sample Conversation",
-            system_prompt="You are a helpful assistant.",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc)
+    try:
+        conversations = await chat_service.list_conversations(
+            user_id=current_user.id, page=page, limit=limit
         )
-    ]
+        return [ConversationResponse.from_orm(c) for c in conversations]
+    except Exception as e:
+        logger.error(f"Error listing conversations: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve conversations."
+        )
 
 
 @router.post(
@@ -54,17 +86,27 @@ async def list_conversations(
         500: {"model": StandardErrorResponse, "description": "Internal server error"},
     }
 )
-async def create_conversation(payload: ConversationCreateRequest):
+async def create_conversation(
+    payload: ConversationCreateRequest,
+    current_user: UserTable = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
+):
     """
     Creates a new blank chat conversation canvas.
     """
-    return ConversationResponse(
-        id=uuid.uuid4(),
-        title=payload.title or "New Conversation",
-        system_prompt=payload.system_prompt,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc)
-    )
+    try:
+        conversation = await chat_service.create_conversation(
+            user_id=current_user.id,
+            title=payload.title,
+            system_prompt=payload.system_prompt,
+        )
+        return ConversationResponse.from_orm(conversation)
+    except Exception as e:
+        logger.error(f"Error creating conversation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create conversation."
+        )
 
 
 @router.delete(
@@ -73,15 +115,40 @@ async def create_conversation(payload: ConversationCreateRequest):
     responses={
         204: {"description": "Conversation successfully deleted"},
         401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden access to resource"},
         404: {"model": StandardErrorResponse, "description": "Conversation not found"},
         500: {"model": StandardErrorResponse, "description": "Internal server error"},
     }
 )
-async def delete_conversation(conversation_id: uuid.UUID):
+async def delete_conversation(
+    conversation_id: uuid.UUID,
+    current_user: UserTable = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
+):
     """
     Deletes an existing conversation session and all associated messages.
     """
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    try:
+        await chat_service.delete_conversation(
+            user_id=current_user.id, conversation_id=conversation_id
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error deleting conversation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete conversation."
+        )
 
 
 @router.get(
@@ -91,6 +158,7 @@ async def delete_conversation(conversation_id: uuid.UUID):
     responses={
         200: {"description": "Retrieved messages history for the conversation"},
         401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden access to resource"},
         404: {"model": StandardErrorResponse, "description": "Conversation not found"},
         500: {"model": StandardErrorResponse, "description": "Internal server error"},
     }
@@ -99,28 +167,36 @@ async def list_messages(
     conversation_id: uuid.UUID,
     limit: int = Query(50, ge=1, le=100, description="Maximum number of messages to fetch"),
     before_id: Optional[uuid.UUID] = Query(None, description="Cursor message ID to fetch messages prior to"),
+    current_user: UserTable = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     """
     Fetches the message logs for a specific conversation using cursor-based pagination.
     """
-    return [
-        MessageResponse(
-            id=uuid.uuid4(),
+    try:
+        messages = await chat_service.list_messages(
+            user_id=current_user.id,
             conversation_id=conversation_id,
-            sender_role="user",
-            content="Hello!",
-            memory_status="pending",
-            created_at=datetime.now(timezone.utc)
-        ),
-        MessageResponse(
-            id=uuid.uuid4(),
-            conversation_id=conversation_id,
-            sender_role="assistant",
-            content="Hello! How can I help you today?",
-            memory_status="pending",
-            created_at=datetime.now(timezone.utc)
+            limit=limit,
+            before_id=before_id,
         )
-    ]
+        return [MessageResponse.from_orm(m) for m in messages]
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error fetching message logs: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve messages."
+        )
 
 
 @router.post(
@@ -132,6 +208,7 @@ async def list_messages(
             "content": {"text/event-stream": {}}
         },
         401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden access to resource"},
         404: {"model": StandardErrorResponse, "description": "Conversation not found"},
         500: {"model": StandardErrorResponse, "description": "Internal server error"},
     }
@@ -139,21 +216,32 @@ async def list_messages(
 async def post_message(
     conversation_id: uuid.UUID,
     payload: MessageCreateRequest,
+    current_user: UserTable = Depends(get_current_user),
+    chat_service: ChatService = Depends(get_chat_service),
 ):
     """
     Submits a user message and yields an SSE stream containing the assistant's reply.
     """
-    async def mock_sse_stream():
-        # Step 1: Send message_id event
-        assistant_msg_id = str(uuid.uuid4())
-        yield f"event: message_id\ndata: {assistant_msg_id}\n\n"
-        
-        # Step 2: Stream content delta events
-        sample_response = "This is a placeholder reply streaming from AME backend. In Milestone 2, we will integrate the LLM client here."
-        for word in sample_response.split():
-            yield f"event: delta\ndata: {word} \n\n"
-            
-        # Step 3: Send done event
-        yield "event: done\ndata: [DONE]\n\n"
-
-    return StreamingResponse(mock_sse_stream(), media_type="text/event-stream")
+    try:
+        stream_gen = chat_service.post_message_stream(
+            user_id=current_user.id,
+            conversation_id=conversation_id,
+            content=payload.content,
+        )
+        return StreamingResponse(stream_gen, media_type="text/event-stream")
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error processing streaming message: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process and stream message response."
+        )
