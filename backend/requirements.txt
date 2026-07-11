@@ -11,6 +11,7 @@ pydantic-settings>=2.2.0
 # Database mapping layers
 sqlalchemy>=2.0.28
 alembic>=1.13.1
+pgvector>=0.2.0
 
 # Database drivers supporting PgSQL
 asyncpg>=0.29.0

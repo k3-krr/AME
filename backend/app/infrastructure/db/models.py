@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import String, Text, DateTime, ForeignKey, func, CheckConstraint, Integer, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 
 class Base(DeclarativeBase):
@@ -111,4 +112,31 @@ class MemoryTable(Base):
     # ORM Relationships
     user: Mapped["UserTable"] = relationship()
     conversation: Mapped[Optional["ConversationTable"]] = relationship()
+    embedding_relation: Mapped[Optional["MemoryEmbeddingTable"]] = relationship(
+        back_populates="memory", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class MemoryEmbeddingTable(Base):
+    __tablename__ = "memory_embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+    embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # ORM Relationship
+    memory: Mapped["MemoryTable"] = relationship(back_populates="embedding_relation")
+
 

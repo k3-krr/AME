@@ -10,13 +10,18 @@ from app.infrastructure.db.models import UserTable
 from app.infrastructure.repositories.sql_repos import (
     SQLMemoryRepository,
     SQLConversationRepository,
+    SQLMemoryEmbeddingRepository,
 )
 from app.application.memory_service import MemoryService
+from app.application.retrieval_service import RetrievalService
+from app.infrastructure.clients.embedding_client import OpenAIEmbeddingProvider
 from app.domain.entities import MemoryType, MemoryStatus
 from app.presentation.api.schemas import (
     MemoryCreateRequest,
     MemoryUpdateRequest,
     MemoryResponse,
+    MemorySearchResponse,
+    ReindexResponse,
     StandardErrorResponse,
 )
 
@@ -25,13 +30,31 @@ logger = logging.getLogger("ame_backend.api.memories")
 router = APIRouter(tags=["memories"])
 
 
+# Instantiate singleton embedding provider
+embedding_provider_impl = OpenAIEmbeddingProvider()
+
+
 def get_memory_service(db: AsyncSession = Depends(get_db)) -> MemoryService:
     """Dependency helper instantiating MemoryService with standard database repositories."""
     memory_repo = SQLMemoryRepository(db)
     conversation_repo = SQLConversationRepository(db)
+    embedding_repo = SQLMemoryEmbeddingRepository(db)
     return MemoryService(
         memory_repo=memory_repo,
         conversation_repo=conversation_repo,
+        embedding_repo=embedding_repo,
+        embedding_provider=embedding_provider_impl,
+    )
+
+
+def get_retrieval_service(db: AsyncSession = Depends(get_db)) -> RetrievalService:
+    """Dependency helper instantiating RetrievalService for semantic query search."""
+    memory_repo = SQLMemoryRepository(db)
+    embedding_repo = SQLMemoryEmbeddingRepository(db)
+    return RetrievalService(
+        memory_repo=memory_repo,
+        embedding_repo=embedding_repo,
+        embedding_provider=embedding_provider_impl,
     )
 
 
@@ -142,6 +165,74 @@ async def list_memories(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve memories."
+        )
+
+
+@router.get(
+    "/memories/search",
+    response_model=List[MemorySearchResponse],
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Successfully retrieved similar memories"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def search_memories(
+    query: str = Query(..., description="The semantic search query string"),
+    top_k: int = Query(5, ge=1, le=100, description="Number of results to return"),
+    memory_type: Optional[MemoryType] = Query(None, description="Filter results by memory type"),
+    current_user: UserTable = Depends(get_current_user),
+    retrieval_service: RetrievalService = Depends(get_retrieval_service),
+):
+    """
+    Semantic search endpoint to fetch user memories matching a text query.
+    """
+    try:
+        results = await retrieval_service.retrieve_relevant_memories(
+            user_id=current_user.id,
+            query=query,
+            top_k=top_k,
+            memory_type=memory_type,
+        )
+        response_data = [
+            MemorySearchResponse(memory=memory, similarity=score)
+            for memory, score in results
+        ]
+        return response_data
+    except Exception as e:
+        logger.error(f"Error performing semantic memory search: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to perform semantic search."
+        )
+
+
+@router.post(
+    "/memories/reindex",
+    response_model=ReindexResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Successfully completed reindexing"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def reindex_memories(
+    current_user: UserTable = Depends(get_current_user),
+    memory_service: MemoryService = Depends(get_memory_service),
+):
+    """
+    Triggers manual generation of missing vector embeddings for the user's active memories.
+    """
+    try:
+        count = await memory_service.reindex_user_memories(user_id=current_user.id)
+        return ReindexResponse(reindexed_count=count)
+    except Exception as e:
+        logger.error(f"Error during memory reindexing: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to run reindexing."
         )
 
 
@@ -349,3 +440,7 @@ async def list_conversation_memories(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve conversation memories."
         )
+
+
+
+

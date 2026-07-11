@@ -29,6 +29,7 @@ class AppSettings(BaseSettings):
     # Third Party Provider Keys
     OPENAI_API_KEY: Optional[str] = None
     LLM_MODEL: str = "gpt-4o"
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
 
     # Settings config path mapping to .env file if available
     model_config = SettingsConfigDict(

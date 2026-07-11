@@ -10,6 +10,7 @@ from app.domain.repositories import (
     IConversationRepository,
     IMessageRepository,
     IMemoryRepository,
+    IMemoryEmbeddingRepository,
 )
 from app.infrastructure.db.models import (
     UserTable,
@@ -17,7 +18,9 @@ from app.infrastructure.db.models import (
     ConversationTable,
     MessageTable,
     MemoryTable,
+    MemoryEmbeddingTable,
 )
+from app.domain.embedding import MemoryEmbedding
 from app.domain.entities import Memory, MemoryType, MemoryStatus, normalize_memory_content
 
 
@@ -352,4 +355,157 @@ class SQLMemoryRepository(IMemoryRepository):
             if normalize_memory_content(record.content) == normalized_target:
                 return _to_domain(record)
         return None
+
+    async def get_by_ids(self, memory_ids: List[uuid.UUID]) -> List[Memory]:
+        if not memory_ids:
+            return []
+        result = await self.session.execute(
+            select(MemoryTable).where(MemoryTable.id.in_(memory_ids))
+        )
+        tables = result.scalars().all()
+        table_map = {t.id: t for t in tables}
+        
+        ordered_memories = []
+        for mid in memory_ids:
+            if mid in table_map:
+                ordered_memories.append(_to_domain(table_map[mid]))
+        return ordered_memories
+
+
+def _to_domain_embedding(table: MemoryEmbeddingTable) -> MemoryEmbedding:
+    """Helper mapper translating SQLAlchemy MemoryEmbeddingTable model to pure domain MemoryEmbedding entity."""
+    return MemoryEmbedding(
+        id=table.id,
+        memory_id=table.memory_id,
+        embedding=table.embedding,
+        provider=table.provider,
+        model=table.model,
+        dimension=table.dimension,
+        created_at=table.created_at,
+        updated_at=table.updated_at,
+    )
+
+
+def cosine_similarity(v1: list[float], v2: list[float]) -> float:
+    """Computes cosine similarity between two float vectors."""
+    dot = sum(x * y for x, y in zip(v1, v2))
+    mag1 = sum(x * x for x in v1) ** 0.5
+    mag2 = sum(x * x for x in v2) ** 0.5
+    if mag1 == 0.0 or mag2 == 0.0:
+        return 0.0
+    return dot / (mag1 * mag2)
+
+
+class SQLMemoryEmbeddingRepository(IMemoryEmbeddingRepository):
+    """SQLAlchemy concrete implementation of the IMemoryEmbeddingRepository contract."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def save(self, embedding: MemoryEmbedding) -> None:
+        result = await self.session.execute(
+            select(MemoryEmbeddingTable).where(MemoryEmbeddingTable.memory_id == embedding.memory_id)
+        )
+        table = result.scalars().first()
+        
+        if table:
+            table.embedding = embedding.embedding
+            table.provider = embedding.provider
+            table.model = embedding.model
+            table.dimension = embedding.dimension
+            table.updated_at = embedding.updated_at
+        else:
+            table = MemoryEmbeddingTable(
+                id=embedding.id,
+                memory_id=embedding.memory_id,
+                embedding=embedding.embedding,
+                provider=embedding.provider,
+                model=embedding.model,
+                dimension=embedding.dimension,
+                created_at=embedding.created_at,
+                updated_at=embedding.updated_at,
+            )
+            self.session.add(table)
+        await self.session.flush()
+
+    async def get_by_memory_id(self, memory_id: uuid.UUID) -> Optional[MemoryEmbedding]:
+        result = await self.session.execute(
+            select(MemoryEmbeddingTable).where(MemoryEmbeddingTable.memory_id == memory_id)
+        )
+        table = result.scalars().first()
+        return _to_domain_embedding(table) if table else None
+
+    async def delete_by_memory_id(self, memory_id: uuid.UUID) -> None:
+        await self.session.execute(
+            delete(MemoryEmbeddingTable).where(MemoryEmbeddingTable.memory_id == memory_id)
+        )
+        await self.session.flush()
+
+    async def similarity_search(
+        self,
+        user_id: uuid.UUID,
+        query_embedding: list[float],
+        top_k: int = 5,
+        memory_type: Optional[MemoryType] = None,
+    ) -> list[tuple[uuid.UUID, float]]:
+        if self.session.bind.dialect.name == "sqlite":
+            query = (
+                select(MemoryEmbeddingTable)
+                .join(MemoryTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
+                .where(
+                    MemoryTable.user_id == user_id,
+                    MemoryTable.status == MemoryStatus.ACTIVE.value
+                )
+            )
+            if memory_type:
+                query = query.where(MemoryTable.memory_type == memory_type.value)
+            
+            result = await self.session.execute(query)
+            tables = result.scalars().all()
+            
+            matches = []
+            for t in tables:
+                similarity = cosine_similarity(query_embedding, t.embedding)
+                matches.append((t.memory_id, similarity))
+            
+            matches.sort(key=lambda x: x[1], reverse=True)
+            return matches[:top_k]
+        else:
+            distance_expr = MemoryEmbeddingTable.embedding.cosine_distance(query_embedding)
+            similarity_expr = (1.0 - distance_expr).label("similarity")
+            
+            query = (
+                select(MemoryEmbeddingTable.memory_id, similarity_expr)
+                .join(MemoryTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
+                .where(
+                    MemoryTable.user_id == user_id,
+                    MemoryTable.status == MemoryStatus.ACTIVE.value
+                )
+            )
+            if memory_type:
+                query = query.where(MemoryTable.memory_type == memory_type.value)
+            
+            query = query.order_by(distance_expr).limit(top_k)
+            result = await self.session.execute(query)
+            rows = result.all()
+            return [(row[0], float(row[1])) for row in rows]
+
+    async def list_memories_missing_embeddings(
+        self, user_id: Optional[uuid.UUID] = None, limit: int = 100
+    ) -> list[uuid.UUID]:
+        query = (
+            select(MemoryTable.id)
+            .outerjoin(MemoryEmbeddingTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
+            .where(
+                MemoryTable.status == MemoryStatus.ACTIVE.value,
+                MemoryEmbeddingTable.id.is_(None)
+            )
+        )
+        if user_id:
+            query = query.where(MemoryTable.user_id == user_id)
+            
+        query = query.limit(limit)
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
 

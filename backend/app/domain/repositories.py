@@ -5,6 +5,7 @@ from typing import AsyncGenerator, Optional, Protocol
 
 from app.infrastructure.db.models import UserTable, ConversationTable, MessageTable, AuthSessionTable
 from app.domain.entities import Memory, MemoryType, MemoryStatus
+from app.domain.embedding import MemoryEmbedding
 
 
 class IMemoryService(abc.ABC):
@@ -172,4 +173,47 @@ class IMemoryRepository(abc.ABC):
         self, conversation_id: uuid.UUID, content: str
     ) -> Optional[Memory]:
         raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_by_ids(self, memory_ids: list[uuid.UUID]) -> list[Memory]:
+        """Retrieves memories by their IDs, preserving order where possible."""
+        raise NotImplementedError()
+
+
+class IMemoryEmbeddingRepository(abc.ABC):
+    """Domain repository contract managing MemoryEmbedding records."""
+
+    @abc.abstractmethod
+    async def save(self, embedding: MemoryEmbedding) -> None:
+        """Saves or updates a MemoryEmbedding in the store."""
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_by_memory_id(self, memory_id: uuid.UUID) -> Optional[MemoryEmbedding]:
+        """Fetches the embedding linked to a memory."""
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def delete_by_memory_id(self, memory_id: uuid.UUID) -> None:
+        """Deletes the embedding linked to a memory."""
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def similarity_search(
+        self,
+        user_id: uuid.UUID,
+        query_embedding: list[float],
+        top_k: int = 5,
+        memory_type: Optional[MemoryType] = None,
+    ) -> list[tuple[uuid.UUID, float]]:
+        """Performs vector search, returning memory_ids and similarity scores."""
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_memories_missing_embeddings(
+        self, user_id: Optional[uuid.UUID] = None, limit: int = 100
+    ) -> list[uuid.UUID]:
+        """Lists active memory IDs that do not have an embedding."""
+        raise NotImplementedError()
+
 

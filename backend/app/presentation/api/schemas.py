@@ -118,3 +118,14 @@ class MemoryResponse(BaseModel):
         from_attributes = True
         populate_by_name = True
 
+
+class MemorySearchResponse(BaseModel):
+    """Schema representing a semantic search result matching memory."""
+    memory: MemoryResponse
+    similarity: float
+
+
+class ReindexResponse(BaseModel):
+    """Schema representing the result of manual reindexing operations."""
+    reindexed_count: int
+

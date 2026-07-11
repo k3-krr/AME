@@ -11,8 +11,12 @@ from app.infrastructure.db.models import UserTable
 from app.infrastructure.repositories.sql_repos import (
     SQLConversationRepository,
     SQLMessageRepository,
+    SQLMemoryRepository,
+    SQLMemoryEmbeddingRepository,
 )
-from app.infrastructure.services.memory_service import MemoryService
+from app.infrastructure.services.memory_service import MemoryService as InfraMemoryService
+from app.application.retrieval_service import RetrievalService
+from app.infrastructure.clients.embedding_client import OpenAIEmbeddingProvider
 from app.infrastructure.clients.llm_client import LLMService
 from app.application.chat_service import ChatService
 from app.presentation.api.schemas import (
@@ -28,19 +32,30 @@ logger = logging.getLogger("ame_backend.api.chat")
 router = APIRouter(tags=["chat"])
 
 # Instantiate singletons for infrastructure services
-memory_service_impl = MemoryService()
 llm_service_impl = LLMService()
+embedding_provider_impl = OpenAIEmbeddingProvider()
 
 
 def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
     """Dependency helper instantiating ChatService with standard database repositories."""
     conversation_repo = SQLConversationRepository(db)
     message_repo = SQLMessageRepository(db)
+    
+    # Instantiate RetrievalService and integration MemoryService
+    memory_repo = SQLMemoryRepository(db)
+    embedding_repo = SQLMemoryEmbeddingRepository(db)
+    retrieval_service = RetrievalService(
+        memory_repo=memory_repo,
+        embedding_repo=embedding_repo,
+        embedding_provider=embedding_provider_impl,
+    )
+    infra_memory_service = InfraMemoryService(retrieval_service=retrieval_service)
+    
     return ChatService(
         conversation_repo=conversation_repo,
         message_repo=message_repo,
         llm_service=llm_service_impl,
-        memory_service=memory_service_impl,
+        memory_service=infra_memory_service,
     )
 
 

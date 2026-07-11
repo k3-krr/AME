@@ -3,23 +3,39 @@ import uuid
 from typing import List
 
 from app.domain.repositories import IMemoryService
+from app.application.retrieval_service import RetrievalService
 
 logger = logging.getLogger("ame_backend.memory_service")
 
 
 class MemoryService(IMemoryService):
     """
-    Pass-through implementation of IMemoryService.
-    Prepares hooks for vector search and background reflection pipelines in v0.2/v0.3.
+    Implementation of IMemoryService leveraging RetrievalService for vector search
+    and context enrichment.
     """
+
+    def __init__(self, retrieval_service: RetrievalService):
+        self.retrieval_service = retrieval_service
 
     async def enrich_context(self, user_id: uuid.UUID, user_query: str) -> List[str]:
         """
-        Placeholder context enrichment. In v0.2, this will query pgvector.
-        For now, returns an empty list.
+        Enriches LLM context by semantically retrieving memories matching the user query.
         """
-        logger.info(f"Memory enrichment requested for user {user_id} and query: '{user_query}' - Retressed 0 facts.")
-        return []
+        try:
+            matches = await self.retrieval_service.retrieve_relevant_memories(
+                user_id=user_id,
+                query=user_query,
+                top_k=5,
+            )
+            logger.info(
+                f"Memory enrichment requested for user {user_id} and query: '{user_query}' "
+                f"- Retrieved {len(matches)} facts."
+            )
+            # Return list of memory text content strings
+            return [memory.content for memory, _score in matches]
+        except Exception as e:
+            logger.error(f"Error enriching context: {e}", exc_info=True)
+            return []
 
     async def enqueue_ingest(self, message_id: uuid.UUID) -> None:
         """

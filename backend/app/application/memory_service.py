@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from app.domain.entities import Memory, MemoryStatus, MemoryType, normalize_memory_content
-from app.domain.repositories import IConversationRepository, IMemoryRepository
+from app.domain.repositories import IConversationRepository, IMemoryRepository, IMemoryEmbeddingRepository
+from app.domain.embedding import MemoryEmbedding, IEmbeddingProvider
 
 logger = logging.getLogger("ame_backend.application.memory_service")
 
@@ -18,9 +19,13 @@ class MemoryService:
         self,
         memory_repo: IMemoryRepository,
         conversation_repo: IConversationRepository,
+        embedding_repo: IMemoryEmbeddingRepository,
+        embedding_provider: IEmbeddingProvider,
     ):
         self.memory_repo = memory_repo
         self.conversation_repo = conversation_repo
+        self.embedding_repo = embedding_repo
+        self.embedding_provider = embedding_provider
 
     async def create_memory(
         self,
@@ -74,6 +79,21 @@ class MemoryService:
             version=1,
             metadata=metadata or {},
         )
+        
+        # 5. Generate and save embedding in the Embedding bounded context
+        vector = await self.embedding_provider.get_embedding(content)
+        embedding_entity = MemoryEmbedding(
+            id=uuid.uuid4(),
+            memory_id=memory.id,
+            embedding=vector,
+            provider=self.embedding_provider.provider_name,
+            model=self.embedding_provider.model_name,
+            dimension=self.embedding_provider.dimension,
+            created_at=now,
+            updated_at=now,
+        )
+        await self.embedding_repo.save(embedding_entity)
+
         logger.info(f"Memory successfully created: {memory.id} for user: {user_id}")
         return memory
 
@@ -146,6 +166,22 @@ class MemoryService:
             version=memory.version + 1,
             metadata=metadata,
         )
+        
+        # If content changed, regenerate and update embedding
+        if content is not None and normalized_content != normalize_memory_content(memory.content):
+            vector = await self.embedding_provider.get_embedding(content)
+            embedding_entity = MemoryEmbedding(
+                id=uuid.uuid4(),
+                memory_id=memory_id,
+                embedding=vector,
+                provider=self.embedding_provider.provider_name,
+                model=self.embedding_provider.model_name,
+                dimension=self.embedding_provider.dimension,
+                created_at=now,
+                updated_at=now,
+            )
+            await self.embedding_repo.save(embedding_entity)
+
         logger.info(f"Memory successfully updated: {memory_id} (Version: {updated_memory.version})")
         return updated_memory
 
@@ -219,3 +255,42 @@ class MemoryService:
             sort_by=sort_by,
             sort_order=sort_order,
         )
+
+    async def reindex_user_memories(self, user_id: uuid.UUID) -> int:
+        """
+        Finds all active memories for the user that are missing embeddings,
+        generates embeddings for them, and persists them.
+        """
+        # Fetch memory IDs missing embeddings
+        missing_ids = await self.embedding_repo.list_memories_missing_embeddings(user_id=user_id, limit=200)
+        if not missing_ids:
+            return 0
+
+        # Retrieve the memories
+        memories = await self.memory_repo.get_by_ids(missing_ids)
+        if not memories:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        reindexed_count = 0
+        
+        # Process them one by one to avoid rate limit or timeout errors
+        for memory in memories:
+            try:
+                vector = await self.embedding_provider.get_embedding(memory.content)
+                embedding_entity = MemoryEmbedding(
+                    id=uuid.uuid4(),
+                    memory_id=memory.id,
+                    embedding=vector,
+                    provider=self.embedding_provider.provider_name,
+                    model=self.embedding_provider.model_name,
+                    dimension=self.embedding_provider.dimension,
+                    created_at=now,
+                    updated_at=now,
+                )
+                await self.embedding_repo.save(embedding_entity)
+                reindexed_count += 1
+            except Exception as e:
+                logger.error(f"Failed to generate embedding during reindexing for memory {memory.id}: {e}", exc_info=True)
+        
+        return reindexed_count

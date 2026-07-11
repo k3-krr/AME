@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Database services configuration
   db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: ame_db
     restart: always
     environment:
