@@ -15,6 +15,7 @@ from app.infrastructure.repositories.sql_repos import (
     SQLMemoryEmbeddingRepository,
     SQLMemoryStateRepository,
     SQLMemoryAccessLogRepository,
+    SQLMemoryExtractionRepository,
 )
 from app.infrastructure.services.memory_service import MemoryService as InfraMemoryService
 from app.application.retrieval_service import RetrievalService
@@ -22,8 +23,12 @@ from app.application.ranking_service import RankingService
 from app.application.analytics_service import AnalyticsService
 from app.config import settings
 from app.infrastructure.clients.embedding_client import OpenAIEmbeddingProvider
-from app.infrastructure.clients.llm_client import LLMService
+from app.infrastructure.clients.llm_client import LLMService, OpenAIExtractionProvider
 from app.application.chat_service import ChatService
+from app.application.memory_service import MemoryService
+from app.application.duplicate_detection_service import DuplicateDetectionService
+from app.application.memory_update_service import MemoryUpdateService
+from app.application.memory_extraction_service import MemoryExtractionService
 from app.presentation.api.schemas import (
     ConversationCreateRequest,
     ConversationResponse,
@@ -51,6 +56,7 @@ def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
     embedding_repo = SQLMemoryEmbeddingRepository(db)
     memory_state_repo = SQLMemoryStateRepository(db)
     access_log_repo = SQLMemoryAccessLogRepository(db)
+    extraction_repo = SQLMemoryExtractionRepository(db)
 
     # Instantiate services
     ranking_service = RankingService(
@@ -78,11 +84,43 @@ def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
     )
     infra_memory_service = InfraMemoryService(retrieval_service=retrieval_service)
     
+    # Instantiate autonomous extraction layers
+    extraction_provider = OpenAIExtractionProvider()
+    duplicate_detection_service = DuplicateDetectionService(
+        embedding_repo=embedding_repo,
+        embedding_provider=embedding_provider_impl,
+        memory_repo=memory_repo,
+        conversation_repo=conversation_repo,
+        extraction_provider=extraction_provider,
+        similarity_threshold=0.82
+    )
+    domain_memory_service = MemoryService(
+        memory_repo=memory_repo,
+        conversation_repo=conversation_repo,
+        embedding_repo=embedding_repo,
+        embedding_provider=embedding_provider_impl,
+        memory_state_repo=memory_state_repo
+    )
+    memory_update_service = MemoryUpdateService(
+        memory_service=domain_memory_service,
+        memory_repo=memory_repo,
+        memory_state_repo=memory_state_repo,
+        conversation_repo=conversation_repo
+    )
+    memory_extraction_service = MemoryExtractionService(
+        extraction_provider=extraction_provider,
+        duplicate_detection_service=duplicate_detection_service,
+        memory_update_service=memory_update_service,
+        extraction_repo=extraction_repo,
+        message_repo=message_repo
+    )
+
     return ChatService(
         conversation_repo=conversation_repo,
         message_repo=message_repo,
         llm_service=llm_service_impl,
         memory_service=infra_memory_service,
+        memory_extraction_service=memory_extraction_service,
     )
 
 

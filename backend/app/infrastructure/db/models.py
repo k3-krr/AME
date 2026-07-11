@@ -183,4 +183,46 @@ class MemoryAccessLogTable(Base):
     conversation: Mapped[Optional["ConversationTable"]] = relationship()
 
 
+class MemoryExtractionTable(Base):
+    __tablename__ = "memory_extractions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationships
+    candidates: Mapped[list["MemoryExtractionCandidateTable"]] = relationship(
+        back_populates="extraction", cascade="all, delete-orphan"
+    )
+
+
+class MemoryExtractionCandidateTable(Base):
+    __tablename__ = "memory_extraction_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    extraction_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memory_extractions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    memory_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    importance_score: Mapped[float] = mapped_column(nullable=False)
+    confidence_score: Mapped[float] = mapped_column(nullable=False)
+    action_taken: Mapped[str] = mapped_column(String(30), nullable=False)
+    target_memory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationship
+    extraction: Mapped["MemoryExtractionTable"] = relationship(back_populates="candidates")
+    memory: Mapped[Optional["MemoryTable"]] = relationship()
+
+
+
 

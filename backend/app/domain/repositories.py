@@ -4,7 +4,17 @@ from datetime import datetime
 from typing import AsyncGenerator, Optional, Protocol
 
 from app.infrastructure.db.models import UserTable, ConversationTable, MessageTable, AuthSessionTable
-from app.domain.entities import Memory, MemoryType, MemoryStatus, MemoryState, MemorySourceType
+from app.domain.entities import (
+    Memory,
+    MemoryType,
+    MemoryStatus,
+    MemoryState,
+    MemorySourceType,
+    MemoryExtraction,
+    MemoryExtractionCandidate,
+    ExtractionStatus,
+    ExtractionAction,
+)
 from app.domain.embedding import MemoryEmbedding
 
 
@@ -303,6 +313,46 @@ class IMemoryAccessLogRepository(abc.ABC):
     @abc.abstractmethod
     async def list_logs_by_memory(self, memory_id: uuid.UUID, limit: int = 100) -> list[any]:
         raise NotImplementedError()
+
+
+class IMemoryExtractionRepository(abc.ABC):
+    """Domain repository contract managing MemoryExtraction and candidate logs."""
+
+    @abc.abstractmethod
+    async def create_extraction(
+        self,
+        conversation_id: uuid.UUID,
+        message_id: Optional[uuid.UUID],
+        status: ExtractionStatus,
+        error_message: Optional[str] = None
+    ) -> MemoryExtraction:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def add_candidate(
+        self,
+        extraction_id: uuid.UUID,
+        content: str,
+        memory_type: MemoryType,
+        importance_score: float,
+        confidence_score: float,
+        action_taken: ExtractionAction,
+        target_memory_id: Optional[uuid.UUID] = None
+    ) -> MemoryExtractionCandidate:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_extraction_with_candidates(
+        self, extraction_id: uuid.UUID
+    ) -> Optional[tuple[MemoryExtraction, list[MemoryExtractionCandidate]]]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_extractions_by_conversation(
+        self, conversation_id: uuid.UUID, page: int = 1, limit: int = 20
+    ) -> list[MemoryExtraction]:
+        raise NotImplementedError()
+
 
 
 

@@ -13,6 +13,7 @@ from app.domain.repositories import (
     IMemoryEmbeddingRepository,
     IMemoryStateRepository,
     IMemoryAccessLogRepository,
+    IMemoryExtractionRepository,
 )
 from app.infrastructure.db.models import (
     UserTable,
@@ -23,9 +24,22 @@ from app.infrastructure.db.models import (
     MemoryEmbeddingTable,
     MemoryStateTable,
     MemoryAccessLogTable,
+    MemoryExtractionTable,
+    MemoryExtractionCandidateTable,
 )
 from app.domain.embedding import MemoryEmbedding
-from app.domain.entities import Memory, MemoryType, MemoryStatus, normalize_memory_content, MemoryState, MemorySourceType
+from app.domain.entities import (
+    Memory,
+    MemoryType,
+    MemoryStatus,
+    normalize_memory_content,
+    MemoryState,
+    MemorySourceType,
+    MemoryExtraction,
+    MemoryExtractionCandidate,
+    ExtractionStatus,
+    ExtractionAction,
+)
 
 
 
@@ -741,6 +755,116 @@ class SQLMemoryAccessLogRepository(IMemoryAccessLogRepository):
             .limit(limit)
         )
         return list(result.scalars().all())
+
+
+def _to_domain_extraction(table: MemoryExtractionTable) -> MemoryExtraction:
+    """Helper mapper translating SQLAlchemy MemoryExtractionTable model to pure domain MemoryExtraction entity."""
+    return MemoryExtraction(
+        id=table.id,
+        conversation_id=table.conversation_id,
+        message_id=table.message_id,
+        extracted_at=table.extracted_at,
+        status=ExtractionStatus(table.status),
+        error_message=table.error_message,
+    )
+
+
+def _to_domain_candidate(table: MemoryExtractionCandidateTable) -> MemoryExtractionCandidate:
+    """Helper mapper translating SQLAlchemy MemoryExtractionCandidateTable model to pure domain MemoryExtractionCandidate entity."""
+    return MemoryExtractionCandidate(
+        id=table.id,
+        extraction_id=table.extraction_id,
+        content=table.content,
+        memory_type=MemoryType(table.memory_type),
+        importance_score=table.importance_score,
+        confidence_score=table.confidence_score,
+        action_taken=ExtractionAction(table.action_taken),
+        target_memory_id=table.target_memory_id,
+    )
+
+
+class SQLMemoryExtractionRepository(IMemoryExtractionRepository):
+    """SQLAlchemy concrete implementation of the IMemoryExtractionRepository contract."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create_extraction(
+        self,
+        conversation_id: uuid.UUID,
+        message_id: Optional[uuid.UUID],
+        status: ExtractionStatus,
+        error_message: Optional[str] = None
+    ) -> MemoryExtraction:
+        table = MemoryExtractionTable(
+            id=uuid.uuid4(),
+            conversation_id=conversation_id,
+            message_id=message_id,
+            status=status.value,
+            error_message=error_message,
+        )
+        self.session.add(table)
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_extraction(table)
+
+    async def add_candidate(
+        self,
+        extraction_id: uuid.UUID,
+        content: str,
+        memory_type: MemoryType,
+        importance_score: float,
+        confidence_score: float,
+        action_taken: ExtractionAction,
+        target_memory_id: Optional[uuid.UUID] = None
+    ) -> MemoryExtractionCandidate:
+        table = MemoryExtractionCandidateTable(
+            id=uuid.uuid4(),
+            extraction_id=extraction_id,
+            content=content,
+            memory_type=memory_type.value,
+            importance_score=importance_score,
+            confidence_score=confidence_score,
+            action_taken=action_taken.value,
+            target_memory_id=target_memory_id,
+        )
+        self.session.add(table)
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_candidate(table)
+
+    async def get_extraction_with_candidates(
+        self, extraction_id: uuid.UUID
+    ) -> Optional[tuple[MemoryExtraction, list[MemoryExtractionCandidate]]]:
+        result = await self.session.execute(
+            select(MemoryExtractionTable).where(MemoryExtractionTable.id == extraction_id)
+        )
+        extraction_table = result.scalars().first()
+        if not extraction_table:
+            return None
+
+        candidates_result = await self.session.execute(
+            select(MemoryExtractionCandidateTable)
+            .where(MemoryExtractionCandidateTable.extraction_id == extraction_id)
+        )
+        candidate_tables = candidates_result.scalars().all()
+        
+        candidates = [_to_domain_candidate(t) for t in candidate_tables]
+        return _to_domain_extraction(extraction_table), candidates
+
+    async def list_extractions_by_conversation(
+        self, conversation_id: uuid.UUID, page: int = 1, limit: int = 20
+    ) -> list[MemoryExtraction]:
+        offset = (page - 1) * limit
+        result = await self.session.execute(
+            select(MemoryExtractionTable)
+            .where(MemoryExtractionTable.conversation_id == conversation_id)
+            .order_by(desc(MemoryExtractionTable.extracted_at))
+            .limit(limit)
+            .offset(offset)
+        )
+        return [_to_domain_extraction(t) for t in result.scalars().all()]
+
 
 
 

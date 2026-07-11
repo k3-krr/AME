@@ -173,3 +173,48 @@ class DecayTriggerResponse(BaseModel):
     updated_count: int
 
 
+class MemoryExtractionResponse(BaseModel):
+    """Schema representing audit log entry of a memory extraction operation."""
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    message_id: Optional[uuid.UUID]
+    extracted_at: datetime
+    status: str
+    error_message: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+class MemoryExtractionCandidateResponse(BaseModel):
+    """Schema representing a single memory candidate detected during extraction."""
+    id: uuid.UUID
+    extraction_id: uuid.UUID
+    content: str
+    memory_type: str
+    importance_score: float
+    confidence_score: float
+    action_taken: str
+    target_memory_id: Optional[uuid.UUID]
+
+    class Config:
+        from_attributes = True
+
+
+class MemoryExtractionDetailResponse(BaseModel):
+    """Schema representing consolidated audit extraction details with items."""
+    extraction: MemoryExtractionResponse
+    candidates: List[MemoryExtractionCandidateResponse]
+
+
+class ReprocessRequest(BaseModel):
+    """Schema requesting batch reprocessing of conversations."""
+    conversation_ids: List[uuid.UUID]
+
+
+class ReprocessResponse(BaseModel):
+    """Schema representing outcome of batch reprocessing execution."""
+    reprocessed_count: int
+
+
+

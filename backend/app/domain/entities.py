@@ -15,6 +15,13 @@ class MemoryType(str, Enum):
     RELATIONSHIP = "Relationship"
     SKILL = "Skill"
     CUSTOM = "Custom"
+    EDUCATION = "Education"
+    WORK = "Work"
+    PROJECT = "Project"
+    HABIT = "Habit"
+    EVENT = "Event"
+    CORRECTION = "Correction"
+    INSTRUCTION = "Instruction"
 
 
 class MemoryStatus(str, Enum):
@@ -106,4 +113,41 @@ class MemoryState:
             raise ValueError("confidence_score must be between 0.0 and 1.0 inclusive")
         if not (0.0 <= self.decay_score <= 1.0):
             raise ValueError("decay_score must be between 0.0 and 1.0 inclusive")
+
+
+class ExtractionStatus(str, Enum):
+    SUCCESS = "success"
+    IGNORED = "ignored"
+    FAILED = "failed"
+
+
+class ExtractionAction(str, Enum):
+    CREATE = "create"
+    REINFORCE = "reinforce"
+    MERGE = "merge"
+    CONFLICT_UPDATE = "conflict_update"
+    IGNORE = "ignore"
+
+
+@dataclass
+class MemoryExtraction:
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    message_id: Optional[uuid.UUID]
+    extracted_at: datetime
+    status: ExtractionStatus
+    error_message: Optional[str] = None
+
+
+@dataclass
+class MemoryExtractionCandidate:
+    id: uuid.UUID
+    extraction_id: uuid.UUID
+    content: str
+    memory_type: MemoryType
+    importance_score: float
+    confidence_score: float
+    action_taken: ExtractionAction
+    target_memory_id: Optional[uuid.UUID] = None
+
 

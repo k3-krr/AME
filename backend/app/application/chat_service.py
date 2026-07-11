@@ -1,6 +1,7 @@
 import uuid
+import asyncio
 from datetime import datetime, timezone
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List, Optional, Any
 import logging
 
 from app.domain.repositories import (
@@ -26,11 +27,13 @@ class ChatService:
         message_repo: IMessageRepository,
         llm_service: ILLMService,
         memory_service: IMemoryService,
+        memory_extraction_service: Optional[Any] = None,
     ):
         self.conversation_repo = conversation_repo
         self.message_repo = message_repo
         self.llm_service = llm_service
         self.memory_service = memory_service
+        self.memory_extraction_service = memory_extraction_service
 
     async def list_conversations(
         self, user_id: uuid.UUID, page: int, limit: int
@@ -174,6 +177,17 @@ class ChatService:
             if last_retrieved:
                 await self.memory_service.reinforce_memories(last_retrieved)
                 logger.info(f"Reinforced matched memories {last_retrieved} after successful delivery.")
+
+            # 9. Autonomous Memory Extraction Trigger (Milestone 6)
+            # Schedule memory extraction in the background to avoid blocking dialogue streaming
+            if self.memory_extraction_service:
+                asyncio.create_task(
+                    self.memory_extraction_service.extract_memories_from_turns(
+                        conversation_id=conversation.id,
+                        message_id=assistant_message.id
+                    )
+                )
+                logger.info(f"Scheduled background autonomous memory extraction for conversation {conversation.id}")
         except Exception as db_err:
             logger.error(f"Failed to save assistant message stream contents: {db_err}")
             raise db_err
