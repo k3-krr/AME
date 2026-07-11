@@ -115,6 +115,9 @@ class MemoryTable(Base):
     embedding_relation: Mapped[Optional["MemoryEmbeddingTable"]] = relationship(
         back_populates="memory", cascade="all, delete-orphan", uselist=False
     )
+    state_relation: Mapped[Optional["MemoryStateTable"]] = relationship(
+        back_populates="memory", cascade="all, delete-orphan", uselist=False
+    )
 
 
 class MemoryEmbeddingTable(Base):
@@ -138,5 +141,46 @@ class MemoryEmbeddingTable(Base):
 
     # ORM Relationship
     memory: Mapped["MemoryTable"] = relationship(back_populates="embedding_relation")
+
+
+class MemoryStateTable(Base):
+    __tablename__ = "memory_states"
+
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), primary_key=True
+    )
+    access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retrieval_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reinforcement_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_reinforced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    decay_score: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    confidence_score: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    importance_score: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False, default="user")
+
+    # ORM Relationship
+    memory: Mapped["MemoryTable"] = relationship(back_populates="state_relation")
+
+
+class MemoryAccessLogTable(Base):
+    __tablename__ = "memory_access_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    similarity_score: Mapped[float] = mapped_column(nullable=False)
+    ranking_score: Mapped[float] = mapped_column(nullable=False)
+    retrieval_success: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+    # ORM Relationship
+    memory: Mapped["MemoryTable"] = relationship()
+    conversation: Mapped[Optional["ConversationTable"]] = relationship()
+
 
 

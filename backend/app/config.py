@@ -31,6 +31,17 @@ class AppSettings(BaseSettings):
     LLM_MODEL: str = "gpt-4o"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
 
+    # Adaptive Memory Engine configuration parameters
+    W_SEMANTIC: float = 0.40
+    W_IMPORTANCE: float = 0.15
+    W_RECENCY: float = 0.15
+    W_FREQUENCY: float = 0.10
+    W_DECAY: float = 0.10
+    W_CONFIDENCE: float = 0.10
+    RECENCY_HALF_LIFE_HOURS: float = 168.0  # 7 days
+    FREQUENCY_THRESHOLD: int = 50
+    DECAY_RATE: float = 0.004  # standard exponential decay constant
+
     # Settings config path mapping to .env file if available
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"),

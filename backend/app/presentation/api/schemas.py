@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field
 
 from app.domain.entities import MemoryType, MemoryStatus
@@ -128,4 +128,48 @@ class MemorySearchResponse(BaseModel):
 class ReindexResponse(BaseModel):
     """Schema representing the result of manual reindexing operations."""
     reindexed_count: int
+
+
+class MemoryStateResponse(BaseModel):
+    """Schema representing the adaptive state/statistics details of a memory."""
+    memory_id: uuid.UUID
+    access_count: int
+    retrieval_count: int
+    reinforcement_count: int
+    last_accessed_at: datetime
+    last_reinforced_at: Optional[datetime]
+    decay_score: float
+    confidence_score: float
+    importance_score: float
+    source_type: str
+
+    class Config:
+        from_attributes = True
+
+
+class MemoryAccessLogResponse(BaseModel):
+    """Schema representing a single historical retrieval log entry."""
+    id: uuid.UUID
+    memory_id: uuid.UUID
+    conversation_id: Optional[uuid.UUID]
+    timestamp: datetime
+    similarity_score: float
+    ranking_score: float
+    retrieval_success: bool
+
+    class Config:
+        from_attributes = True
+
+
+class MemoryAnalyticsResponse(BaseModel):
+    """Schema representing consolidated adaptive metrics for a memory."""
+    memory_id: uuid.UUID
+    state: Optional[MemoryStateResponse]
+    access_logs: List[MemoryAccessLogResponse]
+
+
+class DecayTriggerResponse(BaseModel):
+    """Schema representing outcome of manual decay trigger invocation."""
+    updated_count: int
+
 

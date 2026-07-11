@@ -70,3 +70,40 @@ class Memory:
         normalized = normalize_memory_content(self.content)
         if not normalized:
             raise ValueError("Memory content cannot be empty")
+
+
+class MemorySourceType(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    EXTRACTED = "extracted"
+    MANUAL = "manual"
+
+
+@dataclass
+class MemoryState:
+    memory_id: uuid.UUID
+    access_count: int = 0
+    retrieval_count: int = 0
+    reinforcement_count: int = 0
+    last_accessed_at: datetime = field(default_factory=datetime.utcnow)
+    last_reinforced_at: Optional[datetime] = None
+    decay_score: float = 0.0
+    confidence_score: float = 0.0
+    importance_score: float = 0.0
+    source_type: MemorySourceType = MemorySourceType.USER
+
+    def validate(self) -> None:
+        """
+        Validates the memory state instance bounds:
+        - 0.0 <= importance_score <= 1.0
+        - 0.0 <= confidence_score <= 1.0
+        - 0.0 <= decay_score <= 1.0
+        """
+        if not (0.0 <= self.importance_score <= 1.0):
+            raise ValueError("importance_score must be between 0.0 and 1.0 inclusive")
+        if not (0.0 <= self.confidence_score <= 1.0):
+            raise ValueError("confidence_score must be between 0.0 and 1.0 inclusive")
+        if not (0.0 <= self.decay_score <= 1.0):
+            raise ValueError("decay_score must be between 0.0 and 1.0 inclusive")
+

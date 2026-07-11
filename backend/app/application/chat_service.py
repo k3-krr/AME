@@ -167,6 +167,13 @@ class ChatService:
             # 7. Ingestion trigger (v0.2 hook)
             await self.memory_service.enqueue_ingest(user_message.id)
             await self.memory_service.enqueue_ingest(assistant_message.id)
+
+            # 8. Reinforcement trigger (Milestone 5)
+            # Retrieve cached memory IDs and apply reinforcement
+            last_retrieved = getattr(self.memory_service, "last_retrieved_ids", [])
+            if last_retrieved:
+                await self.memory_service.reinforce_memories(last_retrieved)
+                logger.info(f"Reinforced matched memories {last_retrieved} after successful delivery.")
         except Exception as db_err:
             logger.error(f"Failed to save assistant message stream contents: {db_err}")
             raise db_err

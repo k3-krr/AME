@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import AsyncGenerator, Optional, Protocol
 
 from app.infrastructure.db.models import UserTable, ConversationTable, MessageTable, AuthSessionTable
-from app.domain.entities import Memory, MemoryType, MemoryStatus
+from app.domain.entities import Memory, MemoryType, MemoryStatus, MemoryState, MemorySourceType
 from app.domain.embedding import MemoryEmbedding
 
 
@@ -20,6 +20,12 @@ class IMemoryService(abc.ABC):
     async def enqueue_ingest(self, message_id: str) -> None:
         """Sends message to background queue for memory consolidation (Wait for v0.2)"""
         raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def reinforce_memories(self, memory_ids: list[uuid.UUID]) -> None:
+        """Applies reinforcement loop to retrieved memories."""
+        raise NotImplementedError()
+
 
 
 class ILLMService(abc.ABC):
@@ -215,5 +221,88 @@ class IMemoryEmbeddingRepository(abc.ABC):
     ) -> list[uuid.UUID]:
         """Lists active memory IDs that do not have an embedding."""
         raise NotImplementedError()
+
+
+class IMemoryStateRepository(abc.ABC):
+    """Domain repository contract managing MemoryState records."""
+
+    @abc.abstractmethod
+    async def get_by_memory_id(self, memory_id: uuid.UUID) -> Optional[MemoryState]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_by_memory_ids(self, memory_ids: list[uuid.UUID]) -> list[MemoryState]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def create(
+        self,
+        memory_id: uuid.UUID,
+        access_count: int,
+        retrieval_count: int,
+        reinforcement_count: int,
+        last_accessed_at: datetime,
+        last_reinforced_at: Optional[datetime],
+        decay_score: float,
+        confidence_score: float,
+        importance_score: float,
+        source_type: MemorySourceType,
+    ) -> MemoryState:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def update(
+        self,
+        memory_id: uuid.UUID,
+        access_count: Optional[int] = None,
+        retrieval_count: Optional[int] = None,
+        reinforcement_count: Optional[int] = None,
+        last_accessed_at: Optional[datetime] = None,
+        last_reinforced_at: Optional[datetime] = None,
+        decay_score: Optional[float] = None,
+        confidence_score: Optional[float] = None,
+        importance_score: Optional[float] = None,
+        source_type: Optional[MemorySourceType] = None,
+    ) -> MemoryState:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def increment_access_counters(
+        self, memory_ids: list[uuid.UUID], is_retrieval: bool = True
+    ) -> None:
+        """Batch increments access_count and retrieval_count in the database."""
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def apply_reinforcement(
+        self, memory_ids: list[uuid.UUID], reinforcement_step: float = 0.02
+    ) -> None:
+        """Increments reinforcement_count, resets decay_score, updates last_reinforced_at, and bumps importance_score."""
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def update_decay_scores(self, decay_rate: float) -> int:
+        """Recalculates and updates decay_score for active memory states based on elapsed idle time."""
+        raise NotImplementedError()
+
+
+class IMemoryAccessLogRepository(abc.ABC):
+    """Domain repository contract managing MemoryAccessLog records."""
+
+    @abc.abstractmethod
+    async def log_access(
+        self,
+        memory_id: uuid.UUID,
+        similarity_score: float,
+        ranking_score: float,
+        conversation_id: Optional[uuid.UUID] = None,
+        retrieval_success: bool = True
+    ) -> None:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_logs_by_memory(self, memory_id: uuid.UUID, limit: int = 100) -> list[any]:
+        raise NotImplementedError()
+
 
 

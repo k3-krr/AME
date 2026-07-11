@@ -16,6 +16,7 @@ class MemoryService(IMemoryService):
 
     def __init__(self, retrieval_service: RetrievalService):
         self.retrieval_service = retrieval_service
+        self.last_retrieved_ids: List[uuid.UUID] = []
 
     async def enrich_context(self, user_id: uuid.UUID, user_query: str) -> List[str]:
         """
@@ -27,6 +28,9 @@ class MemoryService(IMemoryService):
                 query=user_query,
                 top_k=5,
             )
+            # Store the retrieved memory IDs for later reinforcement on successful delivery
+            self.last_retrieved_ids = [memory.id for memory, _score in matches]
+
             logger.info(
                 f"Memory enrichment requested for user {user_id} and query: '{user_query}' "
                 f"- Retrieved {len(matches)} facts."
@@ -35,6 +39,7 @@ class MemoryService(IMemoryService):
             return [memory.content for memory, _score in matches]
         except Exception as e:
             logger.error(f"Error enriching context: {e}", exc_info=True)
+            self.last_retrieved_ids = []
             return []
 
     async def enqueue_ingest(self, message_id: uuid.UUID) -> None:
@@ -44,3 +49,16 @@ class MemoryService(IMemoryService):
         """
         logger.info(f"Message {message_id} enqueued for background memory consolidation.")
         return
+
+    async def reinforce_memories(self, memory_ids: List[uuid.UUID]) -> None:
+        """
+        Applies reinforcement to the specified memories by delegating to the memory state repository.
+        """
+        if not memory_ids:
+            return
+        try:
+            await self.retrieval_service.memory_state_repo.apply_reinforcement(memory_ids)
+            logger.info(f"Reinforced memory states: {memory_ids}")
+        except Exception as e:
+            logger.error(f"Error reinforcing memories {memory_ids}: {e}", exc_info=True)
+

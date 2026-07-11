@@ -13,9 +13,14 @@ from app.infrastructure.repositories.sql_repos import (
     SQLMessageRepository,
     SQLMemoryRepository,
     SQLMemoryEmbeddingRepository,
+    SQLMemoryStateRepository,
+    SQLMemoryAccessLogRepository,
 )
 from app.infrastructure.services.memory_service import MemoryService as InfraMemoryService
 from app.application.retrieval_service import RetrievalService
+from app.application.ranking_service import RankingService
+from app.application.analytics_service import AnalyticsService
+from app.config import settings
 from app.infrastructure.clients.embedding_client import OpenAIEmbeddingProvider
 from app.infrastructure.clients.llm_client import LLMService
 from app.application.chat_service import ChatService
@@ -41,13 +46,35 @@ def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
     conversation_repo = SQLConversationRepository(db)
     message_repo = SQLMessageRepository(db)
     
-    # Instantiate RetrievalService and integration MemoryService
+    # Instantiate repositories for adaptive memory state
     memory_repo = SQLMemoryRepository(db)
     embedding_repo = SQLMemoryEmbeddingRepository(db)
+    memory_state_repo = SQLMemoryStateRepository(db)
+    access_log_repo = SQLMemoryAccessLogRepository(db)
+
+    # Instantiate services
+    ranking_service = RankingService(
+        w_semantic=settings.W_SEMANTIC,
+        w_importance=settings.W_IMPORTANCE,
+        w_recency=settings.W_RECENCY,
+        w_frequency=settings.W_FREQUENCY,
+        w_decay=settings.W_DECAY,
+        w_confidence=settings.W_CONFIDENCE,
+        recency_half_life_hours=settings.RECENCY_HALF_LIFE_HOURS,
+        frequency_threshold=settings.FREQUENCY_THRESHOLD,
+    )
+    analytics_service = AnalyticsService(
+        access_log_repo=access_log_repo,
+        memory_state_repo=memory_state_repo,
+    )
+
     retrieval_service = RetrievalService(
         memory_repo=memory_repo,
         embedding_repo=embedding_repo,
         embedding_provider=embedding_provider_impl,
+        memory_state_repo=memory_state_repo,
+        ranking_service=ranking_service,
+        analytics_service=analytics_service,
     )
     infra_memory_service = InfraMemoryService(retrieval_service=retrieval_service)
     

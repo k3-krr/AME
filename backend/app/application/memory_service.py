@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from app.domain.entities import Memory, MemoryStatus, MemoryType, normalize_memory_content
-from app.domain.repositories import IConversationRepository, IMemoryRepository, IMemoryEmbeddingRepository
+from app.domain.repositories import IConversationRepository, IMemoryRepository, IMemoryEmbeddingRepository, IMemoryStateRepository
 from app.domain.embedding import MemoryEmbedding, IEmbeddingProvider
 
 logger = logging.getLogger("ame_backend.application.memory_service")
@@ -21,11 +21,28 @@ class MemoryService:
         conversation_repo: IConversationRepository,
         embedding_repo: IMemoryEmbeddingRepository,
         embedding_provider: IEmbeddingProvider,
+        memory_state_repo: IMemoryStateRepository,
     ):
         self.memory_repo = memory_repo
         self.conversation_repo = conversation_repo
         self.embedding_repo = embedding_repo
         self.embedding_provider = embedding_provider
+        self.memory_state_repo = memory_state_repo
+
+    async def reinforce_memories(self, memory_ids: List[uuid.UUID]) -> None:
+        """
+        Applies reinforcement loops to memory states.
+        """
+        if not memory_ids:
+            return
+        await self.memory_state_repo.apply_reinforcement(memory_ids)
+
+    async def decay_active_memories(self, decay_rate: float) -> int:
+        """
+        Recalculates decay score for active memories based on configuration-defined rates.
+        """
+        return await self.memory_state_repo.update_decay_scores(decay_rate)
+
 
     async def create_memory(
         self,

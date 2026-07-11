@@ -11,9 +11,14 @@ from app.infrastructure.repositories.sql_repos import (
     SQLMemoryRepository,
     SQLConversationRepository,
     SQLMemoryEmbeddingRepository,
+    SQLMemoryStateRepository,
+    SQLMemoryAccessLogRepository,
 )
 from app.application.memory_service import MemoryService
 from app.application.retrieval_service import RetrievalService
+from app.application.ranking_service import RankingService
+from app.application.analytics_service import AnalyticsService
+from app.config import settings
 from app.infrastructure.clients.embedding_client import OpenAIEmbeddingProvider
 from app.domain.entities import MemoryType, MemoryStatus
 from app.presentation.api.schemas import (
@@ -23,6 +28,10 @@ from app.presentation.api.schemas import (
     MemorySearchResponse,
     ReindexResponse,
     StandardErrorResponse,
+    MemoryStateResponse,
+    MemoryAnalyticsResponse,
+    MemoryAccessLogResponse,
+    DecayTriggerResponse,
 )
 
 logger = logging.getLogger("ame_backend.api.memories")
@@ -34,27 +43,61 @@ router = APIRouter(tags=["memories"])
 embedding_provider_impl = OpenAIEmbeddingProvider()
 
 
+def get_ranking_service() -> RankingService:
+    """Dependency helper instantiating RankingService using app config settings."""
+    return RankingService(
+        w_semantic=settings.W_SEMANTIC,
+        w_importance=settings.W_IMPORTANCE,
+        w_recency=settings.W_RECENCY,
+        w_frequency=settings.W_FREQUENCY,
+        w_decay=settings.W_DECAY,
+        w_confidence=settings.W_CONFIDENCE,
+        recency_half_life_hours=settings.RECENCY_HALF_LIFE_HOURS,
+        frequency_threshold=settings.FREQUENCY_THRESHOLD,
+    )
+
+
+def get_analytics_service(db: AsyncSession = Depends(get_db)) -> AnalyticsService:
+    """Dependency helper instantiating AnalyticsService."""
+    access_log_repo = SQLMemoryAccessLogRepository(db)
+    memory_state_repo = SQLMemoryStateRepository(db)
+    return AnalyticsService(
+        access_log_repo=access_log_repo,
+        memory_state_repo=memory_state_repo,
+    )
+
+
 def get_memory_service(db: AsyncSession = Depends(get_db)) -> MemoryService:
     """Dependency helper instantiating MemoryService with standard database repositories."""
     memory_repo = SQLMemoryRepository(db)
     conversation_repo = SQLConversationRepository(db)
     embedding_repo = SQLMemoryEmbeddingRepository(db)
+    memory_state_repo = SQLMemoryStateRepository(db)
     return MemoryService(
         memory_repo=memory_repo,
         conversation_repo=conversation_repo,
         embedding_repo=embedding_repo,
         embedding_provider=embedding_provider_impl,
+        memory_state_repo=memory_state_repo,
     )
 
 
-def get_retrieval_service(db: AsyncSession = Depends(get_db)) -> RetrievalService:
+def get_retrieval_service(
+    db: AsyncSession = Depends(get_db),
+    ranking_service: RankingService = Depends(get_ranking_service),
+    analytics_service: AnalyticsService = Depends(get_analytics_service),
+) -> RetrievalService:
     """Dependency helper instantiating RetrievalService for semantic query search."""
     memory_repo = SQLMemoryRepository(db)
     embedding_repo = SQLMemoryEmbeddingRepository(db)
+    memory_state_repo = SQLMemoryStateRepository(db)
     return RetrievalService(
         memory_repo=memory_repo,
         embedding_repo=embedding_repo,
         embedding_provider=embedding_provider_impl,
+        memory_state_repo=memory_state_repo,
+        ranking_service=ranking_service,
+        analytics_service=analytics_service,
     )
 
 
@@ -440,6 +483,133 @@ async def list_conversation_memories(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve conversation memories."
         )
+
+
+@router.post(
+    "/memories/decay",
+    response_model=DecayTriggerResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Successfully completed decay calculation cycle"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def trigger_decay(
+    current_user: UserTable = Depends(get_current_user),
+    memory_service: MemoryService = Depends(get_memory_service),
+):
+    """
+    Manually triggers background decay calculations for active records.
+    (Prod uses scheduled workers, endpoint exposes manual trigger capability).
+    """
+    try:
+        updated_count = await memory_service.decay_active_memories(decay_rate=settings.DECAY_RATE)
+        return DecayTriggerResponse(updated_count=updated_count)
+    except Exception as e:
+        logger.error(f"Error during memory decay calculation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to run decay cycle."
+        )
+
+
+@router.post(
+    "/memories/{memory_id}/reinforce",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Memory successfully reinforced"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden memory ownership validation"},
+        404: {"model": StandardErrorResponse, "description": "Memory not found"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def manual_reinforce_memory(
+    memory_id: uuid.UUID,
+    current_user: UserTable = Depends(get_current_user),
+    memory_service: MemoryService = Depends(get_memory_service),
+):
+    """
+    Diagnostic endpoint to manually trigger the reinforcement logic for a specific memory state.
+    """
+    try:
+        # Check memory ownership first
+        await memory_service.get_memory(user_id=current_user.id, memory_id=memory_id)
+        await memory_service.reinforce_memories([memory_id])
+        return {"message": "Memory reinforced successfully"}
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error reinforcing memory: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reinforce memory."
+        )
+
+
+@router.get(
+    "/memories/{memory_id}/analytics",
+    response_model=MemoryAnalyticsResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Retrieved memory analytics successfully"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden memory ownership validation"},
+        404: {"model": StandardErrorResponse, "description": "Memory not found"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def get_memory_analytics(
+    memory_id: uuid.UUID,
+    current_user: UserTable = Depends(get_current_user),
+    memory_service: MemoryService = Depends(get_memory_service),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieves detailed access logs and stats for a specific memory.
+    """
+    try:
+        # Check memory ownership
+        await memory_service.get_memory(user_id=current_user.id, memory_id=memory_id)
+        
+        # Query memory state and access logs
+        state_repo = SQLMemoryStateRepository(db)
+        log_repo = SQLMemoryAccessLogRepository(db)
+        
+        state = await state_repo.get_by_memory_id(memory_id)
+        logs = await log_repo.list_logs_by_memory(memory_id, limit=50)
+        
+        return MemoryAnalyticsResponse(
+            memory_id=memory_id,
+            state=state,
+            access_logs=logs
+        )
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error fetching memory analytics: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve memory analytics."
+        )
+
 
 
 

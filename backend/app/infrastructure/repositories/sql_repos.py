@@ -11,6 +11,8 @@ from app.domain.repositories import (
     IMessageRepository,
     IMemoryRepository,
     IMemoryEmbeddingRepository,
+    IMemoryStateRepository,
+    IMemoryAccessLogRepository,
 )
 from app.infrastructure.db.models import (
     UserTable,
@@ -19,9 +21,11 @@ from app.infrastructure.db.models import (
     MessageTable,
     MemoryTable,
     MemoryEmbeddingTable,
+    MemoryStateTable,
+    MemoryAccessLogTable,
 )
 from app.domain.embedding import MemoryEmbedding
-from app.domain.entities import Memory, MemoryType, MemoryStatus, normalize_memory_content
+from app.domain.entities import Memory, MemoryType, MemoryStatus, normalize_memory_content, MemoryState, MemorySourceType
 
 
 
@@ -234,6 +238,23 @@ class SQLMemoryRepository(IMemoryRepository):
         )
         self.session.add(table)
         await self.session.flush()
+
+        # Initialize the memory state record transactionally
+        state_table = MemoryStateTable(
+            memory_id=table.id,
+            access_count=0,
+            retrieval_count=0,
+            reinforcement_count=0,
+            last_accessed_at=last_accessed_at,
+            last_reinforced_at=None,
+            decay_score=0.0,
+            confidence_score=confidence,
+            importance_score=importance,
+            source_type="user",
+        )
+        self.session.add(state_table)
+        await self.session.flush()
+
         await self.session.refresh(table)
         return _to_domain(table)
 
@@ -507,5 +528,219 @@ class SQLMemoryEmbeddingRepository(IMemoryEmbeddingRepository):
         query = query.limit(limit)
         result = await self.session.execute(query)
         return list(result.scalars().all())
+
+
+def _to_domain_state(table: MemoryStateTable) -> MemoryState:
+    """Helper mapper translating SQLAlchemy MemoryStateTable model to pure domain MemoryState entity."""
+    return MemoryState(
+        memory_id=table.memory_id,
+        access_count=table.access_count,
+        retrieval_count=table.retrieval_count,
+        reinforcement_count=table.reinforcement_count,
+        last_accessed_at=table.last_accessed_at,
+        last_reinforced_at=table.last_reinforced_at,
+        decay_score=table.decay_score,
+        confidence_score=table.confidence_score,
+        importance_score=table.importance_score,
+        source_type=MemorySourceType(table.source_type),
+    )
+
+
+class SQLMemoryStateRepository(IMemoryStateRepository):
+    """SQLAlchemy concrete implementation of the IMemoryStateRepository contract."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_memory_id(self, memory_id: uuid.UUID) -> Optional[MemoryState]:
+        result = await self.session.execute(
+            select(MemoryStateTable).where(MemoryStateTable.memory_id == memory_id)
+        )
+        table = result.scalars().first()
+        return _to_domain_state(table) if table else None
+
+    async def get_by_memory_ids(self, memory_ids: list[uuid.UUID]) -> list[MemoryState]:
+        if not memory_ids:
+            return []
+        result = await self.session.execute(
+            select(MemoryStateTable).where(MemoryStateTable.memory_id.in_(memory_ids))
+        )
+        tables = result.scalars().all()
+        return [_to_domain_state(t) for t in tables]
+
+    async def create(
+        self,
+        memory_id: uuid.UUID,
+        access_count: int,
+        retrieval_count: int,
+        reinforcement_count: int,
+        last_accessed_at: datetime,
+        last_reinforced_at: Optional[datetime],
+        decay_score: float,
+        confidence_score: float,
+        importance_score: float,
+        source_type: MemorySourceType,
+    ) -> MemoryState:
+        table = MemoryStateTable(
+            memory_id=memory_id,
+            access_count=access_count,
+            retrieval_count=retrieval_count,
+            reinforcement_count=reinforcement_count,
+            last_accessed_at=last_accessed_at,
+            last_reinforced_at=last_reinforced_at,
+            decay_score=decay_score,
+            confidence_score=confidence_score,
+            importance_score=importance_score,
+            source_type=source_type.value,
+        )
+        self.session.add(table)
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_state(table)
+
+    async def update(
+        self,
+        memory_id: uuid.UUID,
+        access_count: Optional[int] = None,
+        retrieval_count: Optional[int] = None,
+        reinforcement_count: Optional[int] = None,
+        last_accessed_at: Optional[datetime] = None,
+        last_reinforced_at: Optional[datetime] = None,
+        decay_score: Optional[float] = None,
+        confidence_score: Optional[float] = None,
+        importance_score: Optional[float] = None,
+        source_type: Optional[MemorySourceType] = None,
+    ) -> MemoryState:
+        result = await self.session.execute(
+            select(MemoryStateTable).where(MemoryStateTable.memory_id == memory_id)
+        )
+        table = result.scalars().first()
+        if not table:
+            raise KeyError("MemoryState not found")
+
+        if access_count is not None:
+            table.access_count = access_count
+        if retrieval_count is not None:
+            table.retrieval_count = retrieval_count
+        if reinforcement_count is not None:
+            table.reinforcement_count = reinforcement_count
+        if last_accessed_at is not None:
+            table.last_accessed_at = last_accessed_at
+        if last_reinforced_at is not None:
+            table.last_reinforced_at = last_reinforced_at
+        if decay_score is not None:
+            table.decay_score = decay_score
+        if confidence_score is not None:
+            table.confidence_score = confidence_score
+        if importance_score is not None:
+            table.importance_score = importance_score
+        if source_type is not None:
+            table.source_type = source_type.value
+
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_state(table)
+
+    async def increment_access_counters(
+        self, memory_ids: list[uuid.UUID], is_retrieval: bool = True
+    ) -> None:
+        if not memory_ids:
+            return
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        for memory_id in memory_ids:
+            result = await self.session.execute(
+                select(MemoryStateTable).where(MemoryStateTable.memory_id == memory_id)
+            )
+            table = result.scalars().first()
+            if table:
+                table.access_count += 1
+                if is_retrieval:
+                    table.retrieval_count += 1
+                table.last_accessed_at = now
+        await self.session.flush()
+
+    async def apply_reinforcement(
+        self, memory_ids: list[uuid.UUID], reinforcement_step: float = 0.02
+    ) -> None:
+        if not memory_ids:
+            return
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        for memory_id in memory_ids:
+            result = await self.session.execute(
+                select(MemoryStateTable).where(MemoryStateTable.memory_id == memory_id)
+            )
+            table = result.scalars().first()
+            if table:
+                table.reinforcement_count += 1
+                table.last_reinforced_at = now
+                table.decay_score = 0.0
+                table.importance_score = min(1.0, table.importance_score + reinforcement_step)
+        await self.session.flush()
+
+    async def update_decay_scores(self, decay_rate: float) -> int:
+        from datetime import timezone
+        import math
+        now = datetime.now(timezone.utc)
+        
+        result = await self.session.execute(select(MemoryStateTable))
+        tables = result.scalars().all()
+        updated_count = 0
+        for table in tables:
+            last_activity = table.last_reinforced_at or table.last_accessed_at
+            
+            # handle timezone naive / aware datetimes carefully for SQLite/Postgres compatibility
+            if last_activity.tzinfo is not None:
+                last_naive = last_activity.astimezone(timezone.utc).replace(tzinfo=None)
+                now_naive = now.replace(tzinfo=None)
+            else:
+                last_naive = last_activity
+                now_naive = now.replace(tzinfo=None)
+
+            idle_hours = max(0.0, (now_naive - last_naive).total_seconds() / 3600.0)
+            new_decay = 1.0 - math.exp(-decay_rate * idle_hours)
+            table.decay_score = max(0.0, min(1.0, new_decay))
+            updated_count += 1
+        await self.session.flush()
+        return updated_count
+
+
+class SQLMemoryAccessLogRepository(IMemoryAccessLogRepository):
+    """SQLAlchemy concrete implementation of the IMemoryAccessLogRepository contract."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def log_access(
+        self,
+        memory_id: uuid.UUID,
+        similarity_score: float,
+        ranking_score: float,
+        conversation_id: Optional[uuid.UUID] = None,
+        retrieval_success: bool = True
+    ) -> None:
+        from datetime import timezone
+        table = MemoryAccessLogTable(
+            id=uuid.uuid4(),
+            memory_id=memory_id,
+            conversation_id=conversation_id,
+            timestamp=datetime.now(timezone.utc),
+            similarity_score=similarity_score,
+            ranking_score=ranking_score,
+            retrieval_success=retrieval_success,
+        )
+        self.session.add(table)
+        await self.session.flush()
+
+    async def list_logs_by_memory(self, memory_id: uuid.UUID, limit: int = 100) -> list[any]:
+        result = await self.session.execute(
+            select(MemoryAccessLogTable)
+            .where(MemoryAccessLogTable.memory_id == memory_id)
+            .order_by(desc(MemoryAccessLogTable.timestamp))
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
 
 
