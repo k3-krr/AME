@@ -1,6 +1,7 @@
 import uuid
-from typing import Optional
-from sqlalchemy import select, delete, desc
+from datetime import datetime
+from typing import Optional, List
+from sqlalchemy import select, delete, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.repositories import (
@@ -8,8 +9,17 @@ from app.domain.repositories import (
     ISessionRepository,
     IConversationRepository,
     IMessageRepository,
+    IMemoryRepository,
 )
-from app.infrastructure.db.models import UserTable, AuthSessionTable, ConversationTable, MessageTable
+from app.infrastructure.db.models import (
+    UserTable,
+    AuthSessionTable,
+    ConversationTable,
+    MessageTable,
+    MemoryTable,
+)
+from app.domain.entities import Memory, MemoryType, MemoryStatus, normalize_memory_content
+
 
 
 class SQLUserRepository(IUserRepository):
@@ -160,3 +170,186 @@ class SQLMessageRepository(IMessageRepository):
         self.session.add(message)
         await self.session.flush()
         return message
+
+
+def _to_domain(table: MemoryTable) -> Memory:
+    """Helper mapper translating SQLAlchemy MemoryTable model to pure domain Memory entity."""
+    return Memory(
+        id=table.id,
+        user_id=table.user_id,
+        conversation_id=table.conversation_id,
+        content=table.content,
+        memory_type=MemoryType(table.memory_type),
+        importance=table.importance,
+        confidence=table.confidence,
+        status=MemoryStatus(table.status),
+        created_at=table.created_at,
+        updated_at=table.updated_at,
+        last_accessed_at=table.last_accessed_at,
+        version=table.version,
+        metadata=table.metadata_dict or {},
+    )
+
+
+class SQLMemoryRepository(IMemoryRepository):
+    """SQLAlchemy concrete implementation of the IMemoryRepository contract."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_id(self, memory_id: uuid.UUID) -> Optional[Memory]:
+        result = await self.session.execute(
+            select(MemoryTable).where(MemoryTable.id == memory_id)
+        )
+        table = result.scalars().first()
+        return _to_domain(table) if table else None
+
+    async def create(
+        self,
+        user_id: uuid.UUID,
+        conversation_id: Optional[uuid.UUID],
+        content: str,
+        memory_type: MemoryType,
+        importance: float,
+        confidence: float,
+        status: MemoryStatus,
+        last_accessed_at: datetime,
+        version: int,
+        metadata: dict,
+    ) -> Memory:
+        table = MemoryTable(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            content=content,
+            memory_type=memory_type.value,
+            importance=importance,
+            confidence=confidence,
+            status=status.value,
+            last_accessed_at=last_accessed_at,
+            version=version,
+            metadata_dict=metadata or {},
+        )
+        self.session.add(table)
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain(table)
+
+
+    async def update(
+        self,
+        memory_id: uuid.UUID,
+        content: Optional[str] = None,
+        memory_type: Optional[MemoryType] = None,
+        importance: Optional[float] = None,
+        confidence: Optional[float] = None,
+        status: Optional[MemoryStatus] = None,
+        last_accessed_at: Optional[datetime] = None,
+        version: Optional[int] = None,
+        metadata: Optional[dict] = None,
+    ) -> Memory:
+        result = await self.session.execute(
+            select(MemoryTable).where(MemoryTable.id == memory_id)
+        )
+        table = result.scalars().first()
+        if not table:
+            raise KeyError("Memory not found")
+
+        if content is not None:
+            table.content = content
+        if memory_type is not None:
+            table.memory_type = memory_type.value
+        if importance is not None:
+            table.importance = importance
+        if confidence is not None:
+            table.confidence = confidence
+        if status is not None:
+            table.status = status.value
+        if last_accessed_at is not None:
+            table.last_accessed_at = last_accessed_at
+        if version is not None:
+            table.version = version
+        if metadata is not None:
+            table.metadata_dict = metadata
+
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain(table)
+
+
+    async def list_by_user(
+        self,
+        user_id: uuid.UUID,
+        memory_type: Optional[MemoryType] = None,
+        status: Optional[MemoryStatus] = None,
+        page: int = 1,
+        limit: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> List[Memory]:
+        query = select(MemoryTable).where(MemoryTable.user_id == user_id)
+        if memory_type:
+            query = query.where(MemoryTable.memory_type == memory_type.value)
+        if status:
+            query = query.where(MemoryTable.status == status.value)
+
+        # Build dynamic sorting order
+        sort_col = getattr(MemoryTable, sort_by, MemoryTable.created_at)
+        if sort_order == "desc":
+            query = query.order_by(desc(sort_col))
+        else:
+            query = query.order_by(asc(sort_col))
+
+        # Build pagination boundaries
+        offset = (page - 1) * limit
+        query = query.limit(limit).offset(offset)
+
+        result = await self.session.execute(query)
+        return [_to_domain(m) for m in result.scalars().all()]
+
+    async def list_by_conversation(
+        self,
+        conversation_id: uuid.UUID,
+        memory_type: Optional[MemoryType] = None,
+        status: Optional[MemoryStatus] = None,
+        page: int = 1,
+        limit: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> List[Memory]:
+        query = select(MemoryTable).where(MemoryTable.conversation_id == conversation_id)
+        if memory_type:
+            query = query.where(MemoryTable.memory_type == memory_type.value)
+        if status:
+            query = query.where(MemoryTable.status == status.value)
+
+        # Build dynamic sorting order
+        sort_col = getattr(MemoryTable, sort_by, MemoryTable.created_at)
+        if sort_order == "desc":
+            query = query.order_by(desc(sort_col))
+        else:
+            query = query.order_by(asc(sort_col))
+
+        # Build pagination boundaries
+        offset = (page - 1) * limit
+        query = query.limit(limit).offset(offset)
+
+        result = await self.session.execute(query)
+        return [_to_domain(m) for m in result.scalars().all()]
+
+    async def get_active_by_conversation_and_content(
+        self, conversation_id: uuid.UUID, content: str
+    ) -> Optional[Memory]:
+        result = await self.session.execute(
+            select(MemoryTable).where(
+                MemoryTable.conversation_id == conversation_id,
+                MemoryTable.status == MemoryStatus.ACTIVE.value
+            )
+        )
+        active_records = result.scalars().all()
+        normalized_target = normalize_memory_content(content)
+
+        for record in active_records:
+            if normalize_memory_content(record.content) == normalized_target:
+                return _to_domain(record)
+        return None
+

@@ -10,6 +10,8 @@ from app.config import settings
 from app.infrastructure.db.session import async_engine
 from app.presentation.api.auth import router as auth_router
 from app.presentation.api.chat import router as chat_router
+from app.presentation.api.memories import router as memories_router
+
 
 # Setup standard logging configuration
 logging.basicConfig(
@@ -144,3 +146,5 @@ async def global_exception_handler(request, exc: Exception):
 # Register presentation API routers
 app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
 app.include_router(chat_router, prefix=settings.API_V1_PREFIX)
+app.include_router(memories_router, prefix=settings.API_V1_PREFIX)
+

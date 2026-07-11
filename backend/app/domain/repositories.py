@@ -1,8 +1,10 @@
 import abc
 import uuid
+from datetime import datetime
 from typing import AsyncGenerator, Optional, Protocol
 
 from app.infrastructure.db.models import UserTable, ConversationTable, MessageTable, AuthSessionTable
+from app.domain.entities import Memory, MemoryType, MemoryStatus
 
 
 class IMemoryService(abc.ABC):
@@ -98,3 +100,76 @@ class IMessageRepository(abc.ABC):
         self, conversation_id: uuid.UUID, sender_role: str, content: str, memory_status: str = "pending"
     ) -> MessageTable:
         raise NotImplementedError()
+
+
+class IMemoryRepository(abc.ABC):
+    """Domain repository contract managing Memory records."""
+
+    @abc.abstractmethod
+    async def get_by_id(self, memory_id: uuid.UUID) -> Optional[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def create(
+        self,
+        user_id: uuid.UUID,
+        conversation_id: Optional[uuid.UUID],
+        content: str,
+        memory_type: MemoryType,
+        importance: float,
+        confidence: float,
+        status: MemoryStatus,
+        last_accessed_at: datetime,
+        version: int,
+        metadata: dict,
+    ) -> Memory:
+        raise NotImplementedError()
+
+
+    @abc.abstractmethod
+    async def update(
+        self,
+        memory_id: uuid.UUID,
+        content: Optional[str] = None,
+        memory_type: Optional[MemoryType] = None,
+        importance: Optional[float] = None,
+        confidence: Optional[float] = None,
+        status: Optional[MemoryStatus] = None,
+        last_accessed_at: Optional[any] = None,
+        version: Optional[int] = None,
+        metadata: Optional[dict] = None,
+    ) -> Memory:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_by_user(
+        self,
+        user_id: uuid.UUID,
+        memory_type: Optional[MemoryType] = None,
+        status: Optional[MemoryStatus] = None,
+        page: int = 1,
+        limit: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_by_conversation(
+        self,
+        conversation_id: uuid.UUID,
+        memory_type: Optional[MemoryType] = None,
+        status: Optional[MemoryStatus] = None,
+        page: int = 1,
+        limit: int = 20,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_active_by_conversation_and_content(
+        self, conversation_id: uuid.UUID, content: str
+    ) -> Optional[Memory]:
+        raise NotImplementedError()
+

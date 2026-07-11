@@ -3,6 +3,9 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
+from app.domain.entities import MemoryType, MemoryStatus
+
+
 
 # --- Request Schemas ---
 
@@ -71,3 +74,47 @@ class StandardErrorResponse(BaseModel):
     error_code: str
     message: str
     details: Optional[dict] = None
+
+
+# --- Memory Schemas ---
+
+class MemoryCreateRequest(BaseModel):
+    """Schema representing a request to create a new memory."""
+    conversation_id: Optional[uuid.UUID] = Field(None, description="Optional conversation context link")
+    content: str = Field(..., min_length=1, max_length=10000, description="The memory content payload")
+    memory_type: MemoryType = Field(..., description="The type classification of the memory")
+    importance: float = Field(..., ge=0.0, le=1.0, description="Importance weight score between 0.0 and 1.0")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence/reliability score between 0.0 and 1.0")
+    metadata: Optional[dict] = Field(None, description="Custom metadata key-value storage object")
+
+
+class MemoryUpdateRequest(BaseModel):
+    """Schema representing a request to update an existing memory."""
+    content: Optional[str] = Field(None, min_length=1, max_length=10000, description="Optional updated memory content payload")
+    memory_type: Optional[MemoryType] = Field(None, description="Optional updated type classification")
+    importance: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional updated importance score")
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional updated confidence score")
+    status: Optional[MemoryStatus] = Field(None, description="Optional updated status state")
+    metadata: Optional[dict] = Field(None, description="Optional updated custom metadata key-value object")
+
+
+class MemoryResponse(BaseModel):
+    """Schema representing a memory entity record response."""
+    id: uuid.UUID
+    user_id: uuid.UUID
+    conversation_id: Optional[uuid.UUID]
+    content: str
+    memory_type: MemoryType
+    importance: float
+    confidence: float
+    status: MemoryStatus
+    created_at: datetime
+    updated_at: datetime
+    last_accessed_at: datetime
+    version: int
+    metadata: dict = Field(..., alias="metadata")  # Alias or direct mapping
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+

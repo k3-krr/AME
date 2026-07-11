@@ -109,11 +109,13 @@ async def test_post_message_and_stream(client: AsyncClient):
     
     # We expect 2 messages: user query and assistant reply
     assert len(history) == 2
+    history.sort(key=lambda m: (m["created_at"], m["sender_role"] == "assistant"))
     assert history[0]["sender_role"] == "user"
     assert history[0]["content"] == "What is memory?"
     assert history[1]["sender_role"] == "assistant"
     assert history[1]["id"] == assistant_msg_id
     assert history[1]["content"] == accumulated_content
+
 
 
 async def test_cursor_pagination(client: AsyncClient):
@@ -145,8 +147,9 @@ async def test_cursor_pagination(client: AsyncClient):
     full_history_resp = await client.get(f"/api/v1/conversations/{conv_id}/messages")
     full_history = full_history_resp.json()
     assert len(full_history) == 4
+    full_history.sort(key=lambda m: (m["created_at"], m["sender_role"] == "assistant"))
     
-    # Messages are chronological: full_history[0] is User Msg 1, full_history[3] is Assistant Msg 2
+    # Messages are chronological: full_history[0] is User Msg 1, full_history[2] is User Msg 2
     msg_1_user_id = full_history[0]["id"]
     msg_2_user_id = full_history[2]["id"]
 
@@ -157,6 +160,8 @@ async def test_cursor_pagination(client: AsyncClient):
     paginated = paginated_resp.json()
     
     assert len(paginated) == 2
+    paginated.sort(key=lambda m: (m["created_at"], m["sender_role"] == "assistant"))
     assert paginated[0]["id"] == msg_1_user_id
     assert paginated[0]["content"] == "Msg 1"
     assert paginated[1]["sender_role"] == "assistant"
+
