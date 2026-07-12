@@ -15,6 +15,7 @@ from app.domain.entities import (
     ExtractionStatus,
     ExtractionAction,
 )
+from app.domain.memory_system import MemorySystem
 from app.domain.embedding import MemoryEmbedding
 
 
@@ -139,6 +140,9 @@ class IMemoryRepository(abc.ABC):
         last_accessed_at: datetime,
         version: int,
         metadata: dict,
+        memory_system: MemorySystem = MemorySystem.SEMANTIC,
+        occurred_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
     ) -> Memory:
         raise NotImplementedError()
 
@@ -155,6 +159,9 @@ class IMemoryRepository(abc.ABC):
         last_accessed_at: Optional[any] = None,
         version: Optional[int] = None,
         metadata: Optional[dict] = None,
+        memory_system: Optional[MemorySystem] = None,
+        occurred_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
     ) -> Memory:
         raise NotImplementedError()
 
@@ -164,6 +171,7 @@ class IMemoryRepository(abc.ABC):
         user_id: uuid.UUID,
         memory_type: Optional[MemoryType] = None,
         status: Optional[MemoryStatus] = None,
+        memory_system: Optional[MemorySystem] = None,
         page: int = 1,
         limit: int = 20,
         sort_by: str = "created_at",
@@ -177,6 +185,7 @@ class IMemoryRepository(abc.ABC):
         conversation_id: uuid.UUID,
         memory_type: Optional[MemoryType] = None,
         status: Optional[MemoryStatus] = None,
+        memory_system: Optional[MemorySystem] = None,
         page: int = 1,
         limit: int = 20,
         sort_by: str = "created_at",
@@ -193,6 +202,112 @@ class IMemoryRepository(abc.ABC):
     @abc.abstractmethod
     async def get_by_ids(self, memory_ids: list[uuid.UUID]) -> list[Memory]:
         """Retrieves memories by their IDs, preserving order where possible."""
+        raise NotImplementedError()
+
+
+class ISemanticMemoryRepository(IMemoryRepository):
+    """Domain repository contract for Semantic memory system."""
+
+    @abc.abstractmethod
+    async def list_semantic_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_semantic_memories_by_type(self, user_id: uuid.UUID, memory_types: list[MemoryType]) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def retrieve_semantic(
+        self,
+        user_id: uuid.UUID,
+        query_embedding: Optional[list[float]] = None,
+        limit: int = 20,
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+
+class IEpisodicMemoryRepository(IMemoryRepository):
+    """Domain repository contract for Episodic memory system."""
+
+    @abc.abstractmethod
+    async def get_timeline(
+        self,
+        user_id: uuid.UUID,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_by_conversation_episodic(
+        self,
+        conversation_id: uuid.UUID,
+        page: int = 1,
+        limit: int = 20,
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def retrieve_episodic(
+        self,
+        user_id: uuid.UUID,
+        conversation_id: Optional[uuid.UUID] = None,
+        limit: int = 20,
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+
+class IProceduralMemoryRepository(IMemoryRepository):
+    """Domain repository contract for Procedural memory system."""
+
+    @abc.abstractmethod
+    async def get_procedural_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_frequent_procedures(
+        self,
+        user_id: uuid.UUID,
+        limit: int = 10,
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def retrieve_procedural(
+        self,
+        user_id: uuid.UUID,
+        limit: int = 20,
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+
+class IWorkingMemoryRepository(IMemoryRepository):
+    """Domain repository contract for Working memory system."""
+
+    @abc.abstractmethod
+    async def get_active_working_memories(self, user_id: uuid.UUID) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_active_session_context(self, conversation_id: uuid.UUID) -> list[Memory]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def retrieve_working(
+        self,
+        user_id: uuid.UUID,
+        conversation_id: Optional[uuid.UUID] = None,
+    ) -> list[Memory]:
+        raise NotImplementedError()
+
+
+class IRepositoryFactory(abc.ABC):
+    """Domain factory contract responsible for selecting repository by memory system tier."""
+
+    @abc.abstractmethod
+    def get(self, memory_system: MemorySystem) -> IMemoryRepository:
         raise NotImplementedError()
 
 

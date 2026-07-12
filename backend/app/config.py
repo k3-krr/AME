@@ -42,6 +42,10 @@ class AppSettings(BaseSettings):
     FREQUENCY_THRESHOLD: int = 50
     DECAY_RATE: float = 0.004  # standard exponential decay constant
 
+    # Hybrid Memory System (Milestone 7)
+    DEFAULT_MEMORY_SYSTEM: str = "Semantic"
+    WORKING_MEMORY_TTL_HOURS: float = 24.0
+
     # Settings config path mapping to .env file if available
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"),

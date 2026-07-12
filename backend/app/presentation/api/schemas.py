@@ -4,6 +4,7 @@ from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field
 
 from app.domain.entities import MemoryType, MemoryStatus
+from app.domain.memory_system import MemorySystem
 
 
 
@@ -86,6 +87,11 @@ class MemoryCreateRequest(BaseModel):
     importance: float = Field(..., ge=0.0, le=1.0, description="Importance weight score between 0.0 and 1.0")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence/reliability score between 0.0 and 1.0")
     metadata: Optional[dict] = Field(None, description="Custom metadata key-value storage object")
+    memory_system: Optional[MemorySystem] = Field(
+        None, description="Hybrid memory tier; defaults to Semantic when omitted"
+    )
+    occurred_at: Optional[datetime] = Field(None, description="Episodic event timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Working memory expiry timestamp")
 
 
 class MemoryUpdateRequest(BaseModel):
@@ -96,6 +102,9 @@ class MemoryUpdateRequest(BaseModel):
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional updated confidence score")
     status: Optional[MemoryStatus] = Field(None, description="Optional updated status state")
     metadata: Optional[dict] = Field(None, description="Optional updated custom metadata key-value object")
+    memory_system: Optional[MemorySystem] = Field(None, description="Optional hybrid memory tier update")
+    occurred_at: Optional[datetime] = Field(None, description="Optional episodic event timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Optional working memory expiry timestamp")
 
 
 class MemoryResponse(BaseModel):
@@ -105,6 +114,7 @@ class MemoryResponse(BaseModel):
     conversation_id: Optional[uuid.UUID]
     content: str
     memory_type: MemoryType
+    memory_system: MemorySystem
     importance: float
     confidence: float
     status: MemoryStatus
@@ -112,6 +122,8 @@ class MemoryResponse(BaseModel):
     updated_at: datetime
     last_accessed_at: datetime
     version: int
+    occurred_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
     metadata: dict = Field(..., alias="metadata")  # Alias or direct mapping
 
     class Config:

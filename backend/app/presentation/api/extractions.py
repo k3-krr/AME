@@ -59,12 +59,23 @@ def get_extraction_service(db: AsyncSession = Depends(get_db)) -> MemoryExtracti
         similarity_threshold=0.82
     )
 
+    from app.domain.memory_router import MemoryRouter
+    from app.infrastructure.repositories.sql_repos import SQLRepositoryFactory
+    from app.application.hybrid_retrieval_service import HybridRetrievalService
+
+    memory_router = MemoryRouter()
+    repository_factory = SQLRepositoryFactory(db)
+    hybrid_retrieval_service = HybridRetrievalService(repository_factory)
+
     memory_service = MemoryService(
         memory_repo=memory_repo,
         conversation_repo=conversation_repo,
         embedding_repo=embedding_repo,
         embedding_provider=embedding_provider,
-        memory_state_repo=memory_state_repo
+        memory_state_repo=memory_state_repo,
+        memory_router=memory_router,
+        repository_factory=repository_factory,
+        hybrid_retrieval_service=hybrid_retrieval_service
     )
 
     memory_update_service = MemoryUpdateService(

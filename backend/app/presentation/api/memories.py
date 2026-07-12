@@ -73,12 +73,24 @@ def get_memory_service(db: AsyncSession = Depends(get_db)) -> MemoryService:
     conversation_repo = SQLConversationRepository(db)
     embedding_repo = SQLMemoryEmbeddingRepository(db)
     memory_state_repo = SQLMemoryStateRepository(db)
+
+    from app.domain.memory_router import MemoryRouter
+    from app.infrastructure.repositories.sql_repos import SQLRepositoryFactory
+    from app.application.hybrid_retrieval_service import HybridRetrievalService
+
+    memory_router = MemoryRouter()
+    repository_factory = SQLRepositoryFactory(db)
+    hybrid_retrieval_service = HybridRetrievalService(repository_factory)
+
     return MemoryService(
         memory_repo=memory_repo,
         conversation_repo=conversation_repo,
         embedding_repo=embedding_repo,
         embedding_provider=embedding_provider_impl,
         memory_state_repo=memory_state_repo,
+        memory_router=memory_router,
+        repository_factory=repository_factory,
+        hybrid_retrieval_service=hybrid_retrieval_service,
     )
 
 
@@ -133,6 +145,9 @@ async def create_memory(
             importance=payload.importance,
             confidence=payload.confidence,
             metadata=payload.metadata,
+            memory_system=payload.memory_system,
+            occurred_at=payload.occurred_at,
+            expires_at=payload.expires_at,
         )
         return memory
     except ValueError as e:
@@ -353,6 +368,9 @@ async def update_memory(
             confidence=payload.confidence,
             status=payload.status,
             metadata=payload.metadata,
+            memory_system=payload.memory_system,
+            occurred_at=payload.occurred_at,
+            expires_at=payload.expires_at,
         )
         return memory
     except ValueError as e:
@@ -608,6 +626,59 @@ async def get_memory_analytics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve memory analytics."
+        )
+
+
+@router.get(
+    "/memories/hybrid/search",
+    response_model=List[MemoryResponse],
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Successfully retrieved memories across system tiers"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def search_hybrid_memories(
+    query: Optional[str] = Query(None, description="The hybrid search query keyword"),
+    systems: Optional[str] = Query(None, description="Comma-separated tiers (semantic, episodic, procedural, working, all)"),
+    conversation_id: Optional[uuid.UUID] = Query(None, description="Conversation context ID"),
+    current_user: UserTable = Depends(get_current_user),
+    memory_service: MemoryService = Depends(get_memory_service),
+):
+    """
+    Unified hybrid retrieval layer searching across specified memory system tiers.
+    """
+    try:
+        from app.domain.memory_system import MemorySystem
+
+        resolved_systems = None
+        if systems and systems.strip():
+            system_tokens = [s.strip().lower() for s in systems.split(",")]
+            if "all" not in system_tokens:
+                resolved_systems = []
+                system_mapping = {
+                    "semantic": MemorySystem.SEMANTIC,
+                    "episodic": MemorySystem.EPISODIC,
+                    "procedural": MemorySystem.PROCEDURAL,
+                    "working": MemorySystem.WORKING,
+                }
+                for tok in system_tokens:
+                    if tok in system_mapping:
+                        resolved_systems.append(system_mapping[tok])
+
+        memories = await memory_service.search_hybrid_memories(
+            user_id=current_user.id,
+            query=query,
+            systems=resolved_systems,
+            conversation_id=conversation_id,
+        )
+        return memories
+    except Exception as e:
+        logger.error(f"Hybrid search failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Hybrid search operation failed."
         )
 
 

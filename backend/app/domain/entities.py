@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from app.domain.memory_system import MemorySystem, validate_memory_system_constraints
+
 
 class MemoryType(str, Enum):
     PREFERENCE = "Preference"
@@ -61,6 +63,9 @@ class Memory:
     conversation_id: Optional[uuid.UUID] = None
     version: int = 1
     metadata: dict = field(default_factory=dict)
+    memory_system: MemorySystem = MemorySystem.SEMANTIC
+    occurred_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
 
     def validate(self) -> None:
         """
@@ -68,15 +73,23 @@ class Memory:
         - 0.0 <= importance <= 1.0
         - 0.0 <= confidence <= 1.0
         - Reject empty content after normalization
+        - Hybrid memory system cross-field constraints
         """
         if not (0.0 <= self.importance <= 1.0):
             raise ValueError("importance must be between 0.0 and 1.0 inclusive")
         if not (0.0 <= self.confidence <= 1.0):
             raise ValueError("confidence must be between 0.0 and 1.0 inclusive")
-        
+
         normalized = normalize_memory_content(self.content)
         if not normalized:
             raise ValueError("Memory content cannot be empty")
+
+        validate_memory_system_constraints(
+            memory_system=self.memory_system,
+            conversation_id=self.conversation_id,
+            occurred_at=self.occurred_at,
+            expires_at=self.expires_at,
+        )
 
 
 class MemorySourceType(str, Enum):

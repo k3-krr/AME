@@ -84,6 +84,12 @@ class MessageTable(Base):
 
 class MemoryTable(Base):
     __tablename__ = "memories"
+    __table_args__ = (
+        CheckConstraint(
+            "memory_system IN ('Semantic', 'Episodic', 'Procedural', 'Working')",
+            name="check_memory_system",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -108,6 +114,11 @@ class MemoryTable(Base):
     last_accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     metadata_dict: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, server_default="{}")
+    memory_system: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="Semantic", index=True
+    )
+    occurred_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # ORM Relationships
     user: Mapped["UserTable"] = relationship()

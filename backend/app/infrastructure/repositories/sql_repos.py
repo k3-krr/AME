@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import select, delete, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,11 @@ from app.domain.repositories import (
     IConversationRepository,
     IMessageRepository,
     IMemoryRepository,
+    ISemanticMemoryRepository,
+    IEpisodicMemoryRepository,
+    IProceduralMemoryRepository,
+    IWorkingMemoryRepository,
+    IRepositoryFactory,
     IMemoryEmbeddingRepository,
     IMemoryStateRepository,
     IMemoryAccessLogRepository,
@@ -40,6 +45,7 @@ from app.domain.entities import (
     ExtractionStatus,
     ExtractionAction,
 )
+from app.domain.memory_system import MemorySystem
 
 
 
@@ -209,6 +215,9 @@ def _to_domain(table: MemoryTable) -> Memory:
         last_accessed_at=table.last_accessed_at,
         version=table.version,
         metadata=table.metadata_dict or {},
+        memory_system=MemorySystem(table.memory_system),
+        occurred_at=table.occurred_at,
+        expires_at=table.expires_at,
     )
 
 
@@ -237,6 +246,9 @@ class SQLMemoryRepository(IMemoryRepository):
         last_accessed_at: datetime,
         version: int,
         metadata: dict,
+        memory_system: MemorySystem = MemorySystem.SEMANTIC,
+        occurred_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
     ) -> Memory:
         table = MemoryTable(
             user_id=user_id,
@@ -249,6 +261,9 @@ class SQLMemoryRepository(IMemoryRepository):
             last_accessed_at=last_accessed_at,
             version=version,
             metadata_dict=metadata or {},
+            memory_system=memory_system.value,
+            occurred_at=occurred_at,
+            expires_at=expires_at,
         )
         self.session.add(table)
         await self.session.flush()
@@ -284,6 +299,9 @@ class SQLMemoryRepository(IMemoryRepository):
         last_accessed_at: Optional[datetime] = None,
         version: Optional[int] = None,
         metadata: Optional[dict] = None,
+        memory_system: Optional[MemorySystem] = None,
+        occurred_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
     ) -> Memory:
         result = await self.session.execute(
             select(MemoryTable).where(MemoryTable.id == memory_id)
@@ -308,6 +326,14 @@ class SQLMemoryRepository(IMemoryRepository):
             table.version = version
         if metadata is not None:
             table.metadata_dict = metadata
+        if memory_system is not None:
+            table.memory_system = memory_system.value
+            if memory_system != MemorySystem.WORKING:
+                table.expires_at = None
+        if occurred_at is not None:
+            table.occurred_at = occurred_at
+        if expires_at is not None:
+            table.expires_at = expires_at
 
         await self.session.flush()
         await self.session.refresh(table)
@@ -319,6 +345,7 @@ class SQLMemoryRepository(IMemoryRepository):
         user_id: uuid.UUID,
         memory_type: Optional[MemoryType] = None,
         status: Optional[MemoryStatus] = None,
+        memory_system: Optional[MemorySystem] = None,
         page: int = 1,
         limit: int = 20,
         sort_by: str = "created_at",
@@ -329,6 +356,8 @@ class SQLMemoryRepository(IMemoryRepository):
             query = query.where(MemoryTable.memory_type == memory_type.value)
         if status:
             query = query.where(MemoryTable.status == status.value)
+        if memory_system:
+            query = query.where(MemoryTable.memory_system == memory_system.value)
 
         # Build dynamic sorting order
         sort_col = getattr(MemoryTable, sort_by, MemoryTable.created_at)
@@ -349,6 +378,7 @@ class SQLMemoryRepository(IMemoryRepository):
         conversation_id: uuid.UUID,
         memory_type: Optional[MemoryType] = None,
         status: Optional[MemoryStatus] = None,
+        memory_system: Optional[MemorySystem] = None,
         page: int = 1,
         limit: int = 20,
         sort_by: str = "created_at",
@@ -359,6 +389,8 @@ class SQLMemoryRepository(IMemoryRepository):
             query = query.where(MemoryTable.memory_type == memory_type.value)
         if status:
             query = query.where(MemoryTable.status == status.value)
+        if memory_system:
+            query = query.where(MemoryTable.memory_system == memory_system.value)
 
         # Build dynamic sorting order
         sort_col = getattr(MemoryTable, sort_by, MemoryTable.created_at)
@@ -405,6 +437,216 @@ class SQLMemoryRepository(IMemoryRepository):
             if mid in table_map:
                 ordered_memories.append(_to_domain(table_map[mid]))
         return ordered_memories
+
+
+class SQLSemanticMemoryRepository(SQLMemoryRepository, ISemanticMemoryRepository):
+    """SQLAlchemy concrete implementation for Semantic memory system."""
+
+    async def list_semantic_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> List[Memory]:
+        return await self.list_by_user(
+            user_id=user_id,
+            memory_system=MemorySystem.SEMANTIC,
+            page=page,
+            limit=limit,
+        )
+
+    async def get_semantic_memories_by_type(self, user_id: uuid.UUID, memory_types: List[MemoryType]) -> List[Memory]:
+        query = select(MemoryTable).where(
+            MemoryTable.user_id == user_id,
+            MemoryTable.memory_system == MemorySystem.SEMANTIC.value,
+            MemoryTable.memory_type.in_([t.value for t in memory_types]),
+        )
+        result = await self.session.execute(query)
+        return [_to_domain(r) for r in result.scalars().all()]
+
+    async def retrieve_semantic(
+        self,
+        user_id: uuid.UUID,
+        query_embedding: Optional[list[float]] = None,
+        limit: int = 20,
+    ) -> List[Memory]:
+        if query_embedding:
+            if self.session.bind.dialect.name == "sqlite":
+                query = (
+                    select(MemoryEmbeddingTable)
+                    .join(MemoryTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
+                    .where(
+                        MemoryTable.user_id == user_id,
+                        MemoryTable.memory_system == MemorySystem.SEMANTIC.value,
+                        MemoryTable.status == MemoryStatus.ACTIVE.value
+                    )
+                )
+                result = await self.session.execute(query)
+                tables = result.scalars().all()
+                matches = []
+                for t in tables:
+                    similarity = cosine_similarity(query_embedding, t.embedding)
+                    matches.append((t.memory_id, similarity))
+                matches.sort(key=lambda x: x[1], reverse=True)
+                top_ids = [m[0] for m in matches[:limit]]
+                if not top_ids:
+                    return []
+                return await self.get_by_ids(top_ids)
+            else:
+                distance_expr = MemoryEmbeddingTable.embedding.cosine_distance(query_embedding)
+                query = (
+                    select(MemoryTable)
+                    .join(MemoryEmbeddingTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
+                    .where(
+                        MemoryTable.user_id == user_id,
+                        MemoryTable.memory_system == MemorySystem.SEMANTIC.value,
+                        MemoryTable.status == MemoryStatus.ACTIVE.value
+                    )
+                    .order_by(distance_expr)
+                    .limit(limit)
+                )
+                result = await self.session.execute(query)
+                return [_to_domain(r) for r in result.scalars().all()]
+        else:
+            return await self.list_semantic_memories(user_id=user_id, limit=limit)
+
+
+class SQLEpisodicMemoryRepository(SQLMemoryRepository, IEpisodicMemoryRepository):
+    """SQLAlchemy concrete implementation for Episodic memory system."""
+
+    async def get_timeline(
+        self,
+        user_id: uuid.UUID,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> List[Memory]:
+        query = select(MemoryTable).where(
+            MemoryTable.user_id == user_id,
+            MemoryTable.memory_system == MemorySystem.EPISODIC.value,
+        )
+        if start_time:
+            query = query.where(MemoryTable.occurred_at >= start_time)
+        if end_time:
+            query = query.where(MemoryTable.occurred_at <= end_time)
+
+        # Chronological ordering for timeline queries
+        query = query.order_by(asc(MemoryTable.occurred_at))
+
+        offset = (page - 1) * limit
+        query = query.offset(offset).limit(limit)
+
+        result = await self.session.execute(query)
+        return [_to_domain(r) for r in result.scalars().all()]
+
+    async def list_by_conversation_episodic(
+        self,
+        conversation_id: uuid.UUID,
+        page: int = 1,
+        limit: int = 20,
+    ) -> List[Memory]:
+        return await self.list_by_conversation(
+            conversation_id=conversation_id,
+            memory_system=MemorySystem.EPISODIC,
+            page=page,
+            limit=limit,
+            sort_by="occurred_at",
+            sort_order="asc",
+        )
+
+    async def retrieve_episodic(
+        self,
+        user_id: uuid.UUID,
+        conversation_id: Optional[uuid.UUID] = None,
+        limit: int = 20,
+    ) -> List[Memory]:
+        if conversation_id:
+            return await self.list_by_conversation_episodic(conversation_id=conversation_id, limit=limit)
+        return await self.get_timeline(user_id=user_id, limit=limit)
+
+
+class SQLProceduralMemoryRepository(SQLMemoryRepository, IProceduralMemoryRepository):
+    """SQLAlchemy concrete implementation for Procedural memory system."""
+
+    async def get_procedural_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> List[Memory]:
+        return await self.list_by_user(
+            user_id=user_id,
+            memory_system=MemorySystem.PROCEDURAL,
+            page=page,
+            limit=limit,
+        )
+
+    async def get_frequent_procedures(
+        self,
+        user_id: uuid.UUID,
+        limit: int = 10,
+    ) -> List[Memory]:
+        query = (
+            select(MemoryTable)
+            .join(MemoryStateTable, MemoryTable.id == MemoryStateTable.memory_id)
+            .where(
+                MemoryTable.user_id == user_id,
+                MemoryTable.memory_system == MemorySystem.PROCEDURAL.value,
+            )
+            .order_by(desc(MemoryStateTable.access_count))
+            .limit(limit)
+        )
+        result = await self.session.execute(query)
+        return [_to_domain(r) for r in result.scalars().all()]
+
+    async def retrieve_procedural(
+        self,
+        user_id: uuid.UUID,
+        limit: int = 20,
+    ) -> List[Memory]:
+        return await self.get_frequent_procedures(user_id=user_id, limit=limit)
+
+
+class SQLWorkingMemoryRepository(SQLMemoryRepository, IWorkingMemoryRepository):
+    """SQLAlchemy concrete implementation for Working memory system."""
+
+    async def get_active_working_memories(self, user_id: uuid.UUID) -> List[Memory]:
+        now = datetime.now(timezone.utc)
+        query = select(MemoryTable).where(
+            MemoryTable.user_id == user_id,
+            MemoryTable.memory_system == MemorySystem.WORKING.value,
+            MemoryTable.status == MemoryStatus.ACTIVE.value,
+            (MemoryTable.expires_at == None) | (MemoryTable.expires_at > now),
+        )
+        result = await self.session.execute(query)
+        return [_to_domain(r) for r in result.scalars().all()]
+
+    async def list_active_session_context(self, conversation_id: uuid.UUID) -> List[Memory]:
+        now = datetime.now(timezone.utc)
+        query = select(MemoryTable).where(
+            MemoryTable.conversation_id == conversation_id,
+            MemoryTable.memory_system == MemorySystem.WORKING.value,
+            MemoryTable.status == MemoryStatus.ACTIVE.value,
+            (MemoryTable.expires_at == None) | (MemoryTable.expires_at > now),
+        )
+        result = await self.session.execute(query)
+        return [_to_domain(r) for r in result.scalars().all()]
+
+    async def retrieve_working(
+        self,
+        user_id: uuid.UUID,
+        conversation_id: Optional[uuid.UUID] = None,
+    ) -> List[Memory]:
+        if conversation_id:
+            return await self.list_active_session_context(conversation_id=conversation_id)
+        return await self.get_active_working_memories(user_id=user_id)
+
+
+class SQLRepositoryFactory(IRepositoryFactory):
+    """SQLAlchemy concrete implementation of IRepositoryFactory."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+        self._repos = {
+            MemorySystem.SEMANTIC: SQLSemanticMemoryRepository(session),
+            MemorySystem.EPISODIC: SQLEpisodicMemoryRepository(session),
+            MemorySystem.PROCEDURAL: SQLProceduralMemoryRepository(session),
+            MemorySystem.WORKING: SQLWorkingMemoryRepository(session),
+        }
+
+    def get(self, memory_system: MemorySystem) -> IMemoryRepository:
+        return self._repos[memory_system]
 
 
 def _to_domain_embedding(table: MemoryEmbeddingTable) -> MemoryEmbedding:

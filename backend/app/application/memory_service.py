@@ -4,8 +4,17 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from app.domain.entities import Memory, MemoryStatus, MemoryType, normalize_memory_content
-from app.domain.repositories import IConversationRepository, IMemoryRepository, IMemoryEmbeddingRepository, IMemoryStateRepository
+from app.domain.memory_system import (
+    MemorySystem,
+    validate_memory_system_constraints,
+    compute_working_memory_expiry,
+)
+from app.domain.repositories import IConversationRepository, IMemoryRepository, IMemoryEmbeddingRepository, IMemoryStateRepository, IRepositoryFactory
+from app.domain.memory_router import MemoryRouter
 from app.domain.embedding import MemoryEmbedding, IEmbeddingProvider
+from app.config import settings
+
+from app.application.hybrid_retrieval_service import HybridRetrievalService
 
 logger = logging.getLogger("ame_backend.application.memory_service")
 
@@ -22,12 +31,18 @@ class MemoryService:
         embedding_repo: IMemoryEmbeddingRepository,
         embedding_provider: IEmbeddingProvider,
         memory_state_repo: IMemoryStateRepository,
+        memory_router: Optional[MemoryRouter] = None,
+        repository_factory: Optional[IRepositoryFactory] = None,
+        hybrid_retrieval_service: Optional[HybridRetrievalService] = None,
     ):
         self.memory_repo = memory_repo
         self.conversation_repo = conversation_repo
         self.embedding_repo = embedding_repo
         self.embedding_provider = embedding_provider
         self.memory_state_repo = memory_state_repo
+        self.memory_router = memory_router or MemoryRouter()
+        self.repository_factory = repository_factory
+        self.hybrid_retrieval_service = hybrid_retrieval_service
 
     async def reinforce_memories(self, memory_ids: List[uuid.UUID]) -> None:
         """
@@ -53,9 +68,13 @@ class MemoryService:
         importance: float,
         confidence: float,
         metadata: Optional[dict] = None,
+        memory_system: Optional[MemorySystem] = None,
+        occurred_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
     ) -> Memory:
         """
         Creates and persists a new memory after validating inputs and checking for duplicates.
+        Uses MemoryRouter for classification and RepositoryFactory for repository selection.
         """
         # 1. Validation & Normalization
         if not (0.0 <= importance <= 1.0):
@@ -66,6 +85,38 @@ class MemoryService:
         normalized_content = normalize_memory_content(content)
         if not normalized_content:
             raise ValueError("Memory content cannot be empty")
+
+        # Construct a temporary Memory entity for classification
+        temp_memory = Memory(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            content=content,
+            memory_type=memory_type,
+            importance=importance,
+            confidence=confidence,
+            status=MemoryStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            last_accessed_at=datetime.now(timezone.utc),
+            occurred_at=occurred_at,
+            expires_at=expires_at,
+            metadata=metadata or {},
+        )
+
+        # Classify memory tier using MemoryRouter
+        classification_result = self.memory_router.classify(temp_memory, explicit_system=memory_system)
+        resolved_system = classification_result.memory_system
+
+        # Resolve Working memory default expiry TTL
+        resolved_expires_at = expires_at
+        if resolved_system == MemorySystem.WORKING and resolved_expires_at is None:
+            resolved_expires_at = compute_working_memory_expiry(settings.WORKING_MEMORY_TTL_HOURS)
+
+        # Update temp entity and validate system constraints
+        temp_memory.memory_system = resolved_system
+        temp_memory.expires_at = resolved_expires_at
+        temp_memory.validate()
 
         # 2. Conversation Ownership Verification
         if conversation_id:
@@ -82,7 +133,7 @@ class MemoryService:
             if duplicate:
                 raise ValueError("An active memory with identical content already exists in this conversation")
 
-        # 4. Create and Save Memory
+        # 4. Create and Save Memory using the base repository
         now = datetime.now(timezone.utc)
         memory = await self.memory_repo.create(
             user_id=user_id,
@@ -95,6 +146,9 @@ class MemoryService:
             last_accessed_at=now,
             version=1,
             metadata=metadata or {},
+            memory_system=resolved_system,
+            occurred_at=occurred_at,
+            expires_at=resolved_expires_at,
         )
         
         # 5. Generate and save embedding in the Embedding bounded context
@@ -111,7 +165,7 @@ class MemoryService:
         )
         await self.embedding_repo.save(embedding_entity)
 
-        logger.info(f"Memory successfully created: {memory.id} for user: {user_id}")
+        logger.info(f"Memory successfully created: {memory.id} for user: {user_id} in system: {resolved_system.value}")
         return memory
 
     async def get_memory(self, user_id: uuid.UUID, memory_id: uuid.UUID) -> Memory:
@@ -135,6 +189,9 @@ class MemoryService:
         confidence: Optional[float] = None,
         status: Optional[MemoryStatus] = None,
         metadata: Optional[dict] = None,
+        memory_system: Optional[MemorySystem] = None,
+        occurred_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
     ) -> Memory:
         """
         Updates an existing memory after verifying ownership and validating the changes.
@@ -147,6 +204,22 @@ class MemoryService:
         new_confidence = confidence if confidence is not None else memory.confidence
         new_content = content if content is not None else memory.content
         new_status = status if status is not None else memory.status
+        new_system = memory_system if memory_system is not None else memory.memory_system
+        new_conversation_id = memory.conversation_id
+        new_occurred_at = occurred_at if occurred_at is not None else memory.occurred_at
+        new_expires_at = expires_at if expires_at is not None else memory.expires_at
+
+        if new_system == MemorySystem.WORKING and new_expires_at is None:
+            new_expires_at = compute_working_memory_expiry(settings.WORKING_MEMORY_TTL_HOURS)
+        if new_system != MemorySystem.WORKING:
+            new_expires_at = None
+
+        validate_memory_system_constraints(
+            memory_system=new_system,
+            conversation_id=new_conversation_id,
+            occurred_at=new_occurred_at,
+            expires_at=new_expires_at,
+        )
 
         if not (0.0 <= new_importance <= 1.0):
             raise ValueError("importance must be between 0.0 and 1.0 inclusive")
@@ -172,6 +245,10 @@ class MemoryService:
 
         # Perform update
         now = datetime.now(timezone.utc)
+        update_expires_at = expires_at
+        if update_expires_at is None and new_system == MemorySystem.WORKING and memory.expires_at is None:
+            update_expires_at = new_expires_at
+
         updated_memory = await self.memory_repo.update(
             memory_id=memory_id,
             content=content,
@@ -182,6 +259,9 @@ class MemoryService:
             last_accessed_at=now,
             version=memory.version + 1,
             metadata=metadata,
+            memory_system=memory_system,
+            occurred_at=occurred_at,
+            expires_at=update_expires_at,
         )
         
         # If content changed, regenerate and update embedding
@@ -311,3 +391,34 @@ class MemoryService:
                 logger.error(f"Failed to generate embedding during reindexing for memory {memory.id}: {e}", exc_info=True)
         
         return reindexed_count
+
+    async def search_hybrid_memories(
+        self,
+        user_id: uuid.UUID,
+        query: Optional[str] = None,
+        systems: Optional[List[MemorySystem]] = None,
+        limit_per_system: int = 10,
+        conversation_id: Optional[uuid.UUID] = None,
+    ) -> List[Memory]:
+        """
+        Delegates hybrid memory search to the HybridRetrievalService.
+        Generates query embedding for semantic vector routing if query string is present.
+        """
+        if not self.hybrid_retrieval_service:
+            raise RuntimeError("HybridRetrievalService is not initialized in MemoryService")
+
+        query_embedding = None
+        if query and query.strip():
+            try:
+                query_embedding = await self.embedding_provider.get_embedding(query)
+            except Exception as e:
+                logger.error(f"Failed to generate query embedding for hybrid search: {e}", exc_info=True)
+                # Fail-safe: continue search with query_embedding = None (which falls back to metadata/timeline/list)
+
+        return await self.hybrid_retrieval_service.search_hybrid(
+            user_id=user_id,
+            query_embedding=query_embedding,
+            systems=systems,
+            limit_per_system=limit_per_system,
+            conversation_id=conversation_id,
+        )
