@@ -67,7 +67,10 @@ def get_analytics_service(db: AsyncSession = Depends(get_db)) -> AnalyticsServic
     )
 
 
-def get_memory_service(db: AsyncSession = Depends(get_db)) -> MemoryService:
+def get_memory_service(
+    db: AsyncSession = Depends(get_db),
+    ranking_service: RankingService = Depends(get_ranking_service),
+) -> MemoryService:
     """Dependency helper instantiating MemoryService with standard database repositories."""
     memory_repo = SQLMemoryRepository(db)
     conversation_repo = SQLConversationRepository(db)
@@ -77,10 +80,12 @@ def get_memory_service(db: AsyncSession = Depends(get_db)) -> MemoryService:
     from app.domain.memory_router import MemoryRouter
     from app.infrastructure.repositories.sql_repos import SQLRepositoryFactory
     from app.application.hybrid_retrieval_service import HybridRetrievalService
+    from app.application.hybrid_ranking_service import HybridRankingService
 
     memory_router = MemoryRouter()
     repository_factory = SQLRepositoryFactory(db)
     hybrid_retrieval_service = HybridRetrievalService(repository_factory)
+    hybrid_ranking_service = HybridRankingService(ranking_service)
 
     return MemoryService(
         memory_repo=memory_repo,
@@ -91,6 +96,7 @@ def get_memory_service(db: AsyncSession = Depends(get_db)) -> MemoryService:
         memory_router=memory_router,
         repository_factory=repository_factory,
         hybrid_retrieval_service=hybrid_retrieval_service,
+        hybrid_ranking_service=hybrid_ranking_service,
     )
 
 

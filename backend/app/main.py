@@ -12,6 +12,9 @@ from app.presentation.api.auth import router as auth_router
 from app.presentation.api.chat import router as chat_router
 from app.presentation.api.memories import router as memories_router
 from app.presentation.api.extractions import router as extractions_router
+from app.knowledge_graph.api.entities import router as kg_entities_router
+from app.knowledge_graph.api.relationships import router as kg_relationships_router
+
 
 
 # Setup standard logging configuration
@@ -149,4 +152,7 @@ app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
 app.include_router(chat_router, prefix=settings.API_V1_PREFIX)
 app.include_router(memories_router, prefix=settings.API_V1_PREFIX)
 app.include_router(extractions_router, prefix=settings.API_V1_PREFIX)
+app.include_router(kg_entities_router, prefix=settings.API_V1_PREFIX)
+app.include_router(kg_relationships_router, prefix=settings.API_V1_PREFIX)
+
 

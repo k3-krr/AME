@@ -15,6 +15,7 @@ from app.domain.embedding import MemoryEmbedding, IEmbeddingProvider
 from app.config import settings
 
 from app.application.hybrid_retrieval_service import HybridRetrievalService
+from app.application.hybrid_ranking_service import HybridRankingService
 
 logger = logging.getLogger("ame_backend.application.memory_service")
 
@@ -34,6 +35,7 @@ class MemoryService:
         memory_router: Optional[MemoryRouter] = None,
         repository_factory: Optional[IRepositoryFactory] = None,
         hybrid_retrieval_service: Optional[HybridRetrievalService] = None,
+        hybrid_ranking_service: Optional[HybridRankingService] = None,
     ):
         self.memory_repo = memory_repo
         self.conversation_repo = conversation_repo
@@ -43,6 +45,7 @@ class MemoryService:
         self.memory_router = memory_router or MemoryRouter()
         self.repository_factory = repository_factory
         self.hybrid_retrieval_service = hybrid_retrieval_service
+        self.hybrid_ranking_service = hybrid_ranking_service
 
     async def reinforce_memories(self, memory_ids: List[uuid.UUID]) -> None:
         """
@@ -403,6 +406,7 @@ class MemoryService:
         """
         Delegates hybrid memory search to the HybridRetrievalService.
         Generates query embedding for semantic vector routing if query string is present.
+        Applies MemorySystem-aware ranking using the HybridRankingService.
         """
         if not self.hybrid_retrieval_service:
             raise RuntimeError("HybridRetrievalService is not initialized in MemoryService")
@@ -415,10 +419,49 @@ class MemoryService:
                 logger.error(f"Failed to generate query embedding for hybrid search: {e}", exc_info=True)
                 # Fail-safe: continue search with query_embedding = None (which falls back to metadata/timeline/list)
 
-        return await self.hybrid_retrieval_service.search_hybrid(
+        # 1. Retrieve candidates
+        memories = await self.hybrid_retrieval_service.search_hybrid(
             user_id=user_id,
             query_embedding=query_embedding,
             systems=systems,
             limit_per_system=limit_per_system,
             conversation_id=conversation_id,
         )
+
+        if not memories:
+            return []
+
+        # 2. Return unranked if hybrid ranking service is not configured
+        if not self.hybrid_ranking_service:
+            return memories
+
+        # 3. Retrieve states
+        memory_ids = [m.id for m in memories]
+        states = await self.memory_state_repo.get_by_memory_ids(memory_ids)
+
+        # 4. Generate semantic scores if query embedding is available
+        semantic_scores = {}
+        if query_embedding:
+            for memory in memories:
+                try:
+                    emb = await self.embedding_repo.get_by_memory_id(memory.id)
+                    if emb:
+                        dot = sum(x * y for x, y in zip(query_embedding, emb.embedding))
+                        mag1 = sum(x * x for x in query_embedding) ** 0.5
+                        mag2 = sum(x * x for x in emb.embedding) ** 0.5
+                        similarity = dot / (mag1 * mag2) if (mag1 > 0 and mag2 > 0) else 0.0
+                        semantic_scores[memory.id] = similarity
+                    else:
+                        semantic_scores[memory.id] = 0.0
+                except Exception as e:
+                    logger.error(f"Failed to calculate similarity score for memory {memory.id}: {e}", exc_info=True)
+                    semantic_scores[memory.id] = 0.0
+
+        # 5. Apply hybrid memory-aware ranking
+        ranked_tuples = self.hybrid_ranking_service.rank_hybrid_memories(
+            memories=memories,
+            states=states,
+            semantic_scores=semantic_scores,
+        )
+
+        return [item[0] for item in ranked_tuples]

@@ -22,7 +22,10 @@ from app.infrastructure.clients.llm_client import OpenAIExtractionProvider
 from app.application.duplicate_detection_service import DuplicateDetectionService
 from app.application.memory_update_service import MemoryUpdateService
 from app.application.memory_extraction_service import MemoryExtractionService
+from app.application.memory_graph_orchestrator import MemoryGraphOrchestrator
+from app.knowledge_graph.dependencies.graph_deps import get_entity_extraction_service
 from app.application.memory_service import MemoryService
+
 
 from app.presentation.api.schemas import (
     MemoryExtractionResponse,
@@ -38,8 +41,8 @@ logger = logging.getLogger("ame_backend.api.extractions")
 router = APIRouter(tags=["extractions"])
 
 
-def get_extraction_service(db: AsyncSession = Depends(get_db)) -> MemoryExtractionService:
-    """Dependency helper instantiating MemoryExtractionService with repository mapping layers."""
+def get_extraction_service(db: AsyncSession = Depends(get_db)) -> MemoryGraphOrchestrator:
+    """Dependency helper instantiating MemoryGraphOrchestrator wrapping extraction service."""
     extraction_repo = SQLMemoryExtractionRepository(db)
     message_repo = SQLMessageRepository(db)
     memory_repo = SQLMemoryRepository(db)
@@ -62,10 +65,14 @@ def get_extraction_service(db: AsyncSession = Depends(get_db)) -> MemoryExtracti
     from app.domain.memory_router import MemoryRouter
     from app.infrastructure.repositories.sql_repos import SQLRepositoryFactory
     from app.application.hybrid_retrieval_service import HybridRetrievalService
+    from app.application.hybrid_ranking_service import HybridRankingService
+    from app.application.ranking_service import RankingService
 
     memory_router = MemoryRouter()
     repository_factory = SQLRepositoryFactory(db)
     hybrid_retrieval_service = HybridRetrievalService(repository_factory)
+    ranking_service = RankingService()
+    hybrid_ranking_service = HybridRankingService(ranking_service)
 
     memory_service = MemoryService(
         memory_repo=memory_repo,
@@ -75,7 +82,8 @@ def get_extraction_service(db: AsyncSession = Depends(get_db)) -> MemoryExtracti
         memory_state_repo=memory_state_repo,
         memory_router=memory_router,
         repository_factory=repository_factory,
-        hybrid_retrieval_service=hybrid_retrieval_service
+        hybrid_retrieval_service=hybrid_retrieval_service,
+        hybrid_ranking_service=hybrid_ranking_service
     )
 
     memory_update_service = MemoryUpdateService(
@@ -85,13 +93,23 @@ def get_extraction_service(db: AsyncSession = Depends(get_db)) -> MemoryExtracti
         conversation_repo=conversation_repo
     )
 
-    return MemoryExtractionService(
+    memory_extraction_service = MemoryExtractionService(
         extraction_provider=extraction_provider,
         duplicate_detection_service=duplicate_detection_service,
         memory_update_service=memory_update_service,
         extraction_repo=extraction_repo,
         message_repo=message_repo
     )
+
+    entity_extraction_service = get_entity_extraction_service(db)
+
+    return MemoryGraphOrchestrator(
+        memory_extraction_service=memory_extraction_service,
+        entity_extraction_service=entity_extraction_service,
+        memory_repo=memory_repo,
+        extraction_repo=extraction_repo,
+    )
+
 
 
 @router.post(
@@ -109,7 +127,7 @@ def get_extraction_service(db: AsyncSession = Depends(get_db)) -> MemoryExtracti
 async def manual_extract_memories(
     conversation_id: uuid.UUID,
     current_user: UserTable = Depends(get_current_user),
-    extraction_service: MemoryExtractionService = Depends(get_extraction_service),
+    extraction_service: MemoryGraphOrchestrator = Depends(get_extraction_service),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -247,7 +265,7 @@ async def get_extraction_details(
 async def reprocess_conversations(
     request: ReprocessRequest,
     current_user: UserTable = Depends(get_current_user),
-    extraction_service: MemoryExtractionService = Depends(get_extraction_service),
+    extraction_service: MemoryGraphOrchestrator = Depends(get_extraction_service),
     db: AsyncSession = Depends(get_db),
 ):
     """

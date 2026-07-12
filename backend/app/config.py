@@ -46,6 +46,38 @@ class AppSettings(BaseSettings):
     DEFAULT_MEMORY_SYSTEM: str = "Semantic"
     WORKING_MEMORY_TTL_HOURS: float = 24.0
 
+    # Configurable Hybrid system ranking weights
+    SEMANTIC_WEIGHT: float = 1.0
+    EPISODIC_WEIGHT: float = 1.0
+    PROCEDURAL_WEIGHT: float = 1.0
+    WORKING_WEIGHT: float = 1.0
+
+    SEMANTIC_MEMORY_WEIGHT: float = 1.0
+    EPISODIC_MEMORY_WEIGHT: float = 1.0
+    PROCEDURAL_MEMORY_WEIGHT: float = 1.0
+    WORKING_MEMORY_WEIGHT: float = 1.0
+
+    # Configurable inner-attributes weights
+    SEMANTIC_SIMILARITY_WEIGHT: float = 0.5
+    SEMANTIC_IMPORTANCE_WEIGHT: float = 0.3
+    SEMANTIC_FREQUENCY_WEIGHT: float = 0.2
+
+    EPISODIC_SIMILARITY_WEIGHT: float = 0.4
+    EPISODIC_RECENCY_WEIGHT: float = 0.4
+    EPISODIC_IMPORTANCE_WEIGHT: float = 0.2
+
+    PROCEDURAL_SIMILARITY_WEIGHT: float = 0.4
+    PROCEDURAL_FREQUENCY_WEIGHT: float = 0.3
+    PROCEDURAL_SUCCESS_WEIGHT: float = 0.3
+
+    WORKING_PRIORITY_WEIGHT: float = 0.4
+    WORKING_RECENCY_WEIGHT: float = 0.4
+    WORKING_ACTIVE_WEIGHT: float = 0.2
+
+    # Mix factors
+    W_HYBRID_ADAPTIVE: float = 0.5
+    W_HYBRID_SYSTEM: float = 0.5
+
     # Settings config path mapping to .env file if available
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"),

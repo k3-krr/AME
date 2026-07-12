@@ -235,5 +235,10 @@ class MemoryExtractionCandidateTable(Base):
     memory: Mapped[Optional["MemoryTable"]] = relationship()
 
 
+# Register Knowledge Graph Bounded Context models
+from app.knowledge_graph.models.models import NodeTable, RelationshipTable, MemoryNodeMappingTable
+
+
+
 
 
