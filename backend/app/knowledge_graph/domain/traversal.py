@@ -1,7 +1,9 @@
 import abc
 import uuid
 from enum import Enum
-from typing import List, Dict, Any, Protocol
+from typing import List, Dict, Any, Optional
+
+from app.knowledge_graph.domain.entities import RelationshipType, NodeType, EntityType
 
 
 class TraversalStrategy(str, Enum):
@@ -11,23 +13,41 @@ class TraversalStrategy(str, Enum):
     RANDOM_WALK = "RANDOM_WALK"
 
 
-class GraphTraversalProtocol(Protocol):
-    """Protocol establishing execution contract for graph network pathing/traversal."""
+class ITraversalCacheProvider(abc.ABC):
+    """Extension point interface for graph traversal caching."""
+    pass
 
+
+class IGraphTraversalService(abc.ABC):
+    """Domain interface establishing graph network pathing/traversal."""
+
+    @abc.abstractmethod
     async def traverse(
         self,
+        user_id: uuid.UUID,
         start_node_id: uuid.UUID,
-        strategy: TraversalStrategy,
         max_depth: int = 3,
-        relationship_types: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Traverses the graph from a starting node based on specified search strategy."""
-        ...
+        direction: str = "both",
+        relationship_types: Optional[List[RelationshipType]] = None,
+        node_types: Optional[List[NodeType]] = None,
+        entity_types: Optional[List[EntityType]] = None,
+        confidence_threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Traverses the graph from a starting node, returning visited nodes and metadata."""
+        raise NotImplementedError()
 
+    @abc.abstractmethod
     async def find_shortest_path(
         self,
+        user_id: uuid.UUID,
         source_node_id: uuid.UUID,
         target_node_id: uuid.UUID,
-    ) -> List[uuid.UUID]:
+        direction: str = "both",
+        relationship_types: Optional[List[RelationshipType]] = None,
+        node_types: Optional[List[NodeType]] = None,
+        entity_types: Optional[List[EntityType]] = None,
+        confidence_threshold: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Discovers the shortest path link chain connecting two node structures."""
-        ...
+        raise NotImplementedError()
+

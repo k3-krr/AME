@@ -30,6 +30,7 @@ class RelationshipService:
         relationship_type: RelationshipType,
         confidence: float = 1.0,
         metadata: Optional[dict] = None,
+        prevent_self_loops: bool = False,
     ) -> Relationship:
         """Creates a relationship edge after validating endpoint existence and uniqueness."""
         if not relationship_type:
@@ -46,7 +47,7 @@ class RelationshipService:
         if not target or target.user_id != user_id:
             raise EntityNotFoundError(f"Target entity with ID {target_node_id} not found.")
 
-        if source_node_id == target_node_id:
+        if prevent_self_loops and source_node_id == target_node_id:
             raise ValueError("Self-referential loops are not allowed in relationships")
 
         # 2. Check for duplicate relationship edge
@@ -68,8 +69,38 @@ class RelationshipService:
             metadata=metadata or {},
             created_at=datetime.utcnow(),
         )
-        relationship.validate()
+        relationship.validate(prevent_self_loops=prevent_self_loops)
         return await self.relationship_repo.create(relationship)
+
+    async def resolve_relationship(
+        self,
+        user_id: uuid.UUID,
+        source_node_id: uuid.UUID,
+        target_node_id: uuid.UUID,
+        relationship_type: RelationshipType,
+        confidence: float = 1.0,
+        metadata: Optional[dict] = None,
+        prevent_self_loops: bool = False,
+    ) -> Relationship:
+        """
+        Resolves a relationship: if the edge already exists for endpoints and type,
+        reuses/returns it. Otherwise, creates a new relationship edge.
+        """
+        existing = await self.relationship_repo.get_by_endpoints(
+            user_id, source_node_id, target_node_id, relationship_type
+        )
+        if existing:
+            return existing
+        return await self.create_relationship(
+            user_id=user_id,
+            source_node_id=source_node_id,
+            target_node_id=target_node_id,
+            relationship_type=relationship_type,
+            confidence=confidence,
+            metadata=metadata,
+            prevent_self_loops=prevent_self_loops,
+        )
+
 
     async def get_relationship(self, user_id: uuid.UUID, relationship_id: uuid.UUID) -> Relationship:
         """Retrieves a relationship edge, validating user ownership."""
@@ -85,6 +116,7 @@ class RelationshipService:
         relationship_type: Optional[RelationshipType] = None,
         confidence: Optional[float] = None,
         metadata: Optional[dict] = None,
+        prevent_self_loops: bool = False,
     ) -> Relationship:
         """Updates attributes of an existing relationship edge."""
         rel = await self.get_relationship(user_id, relationship_id)
@@ -109,7 +141,7 @@ class RelationshipService:
         if metadata is not None:
             rel.metadata = metadata
 
-        rel.validate()
+        rel.validate(prevent_self_loops=prevent_self_loops)
         return await self.relationship_repo.update(rel)
 
     async def delete_relationship(self, user_id: uuid.UUID, relationship_id: uuid.UUID) -> bool:

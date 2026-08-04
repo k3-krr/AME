@@ -66,3 +66,40 @@ class RelationshipResponse(BaseModel):
     class Config:
         from_attributes = True
         populate_by_name = True
+
+
+# --- Traversal Schemas (Phase 4) ---
+
+class TraversalMetadata(BaseModel):
+    traversal_strategy: str
+    max_depth: int
+    traversal_depth: int
+    visited_node_count: int
+    visited_relationship_count: int
+    path_length: Optional[int] = None
+    execution_time_ms: float
+    termination_reason: str
+
+
+class TraversalNodeInfo(BaseModel):
+    node: EntityResponse
+    depth: int
+
+
+class TraversalResponse(BaseModel):
+    nodes: list[TraversalNodeInfo]
+    metadata: TraversalMetadata
+
+
+class PathResponse(BaseModel):
+    nodes: list[EntityResponse]
+    relationships: list[RelationshipResponse]
+    hop_count: int
+    metadata: TraversalMetadata
+
+
+class NeighborResponse(BaseModel):
+    node: EntityResponse
+    relationship: RelationshipResponse
+    direction: str
+

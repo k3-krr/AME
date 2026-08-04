@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from app.domain.entities import Memory, MemoryStatus, MemoryType, normalize_memory_content
 from app.domain.memory_system import (
@@ -15,6 +15,7 @@ from app.domain.embedding import MemoryEmbedding, IEmbeddingProvider
 from app.config import settings
 
 from app.application.hybrid_retrieval_service import HybridRetrievalService
+from app.application.graph_aware_hybrid_retrieval_service import GraphAwareHybridRetrievalService
 from app.application.hybrid_ranking_service import HybridRankingService
 
 logger = logging.getLogger("ame_backend.application.memory_service")
@@ -34,7 +35,7 @@ class MemoryService:
         memory_state_repo: IMemoryStateRepository,
         memory_router: Optional[MemoryRouter] = None,
         repository_factory: Optional[IRepositoryFactory] = None,
-        hybrid_retrieval_service: Optional[HybridRetrievalService] = None,
+        hybrid_retrieval_service: Optional[Union[HybridRetrievalService, GraphAwareHybridRetrievalService]] = None,
         hybrid_ranking_service: Optional[HybridRankingService] = None,
     ):
         self.memory_repo = memory_repo

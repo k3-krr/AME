@@ -1,7 +1,8 @@
 import uuid
 from typing import Optional, List, Tuple
-from sqlalchemy import select, delete, desc, asc, and_
+from sqlalchemy import select, delete, desc, asc, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+
 
 from app.knowledge_graph.domain.entities import (
     Node,
@@ -48,6 +49,20 @@ class SQLEntityRepository(IEntityRepository):
         )
         table = result.scalars().first()
         return to_domain(table) if table else None
+
+    async def get_by_ids(self, entity_ids: List[uuid.UUID]) -> List[Node]:
+        if not entity_ids:
+            return []
+        result = await self.session.execute(
+            select(NodeTable).where(
+                and_(
+                    NodeTable.id.in_(entity_ids),
+                    NodeTable.node_type == NodeType.ENTITY.value,
+                )
+            )
+        )
+        return [to_domain(t) for t in result.scalars().all()]
+
 
     async def get_by_name(self, user_id: uuid.UUID, canonical_name: str) -> Optional[Node]:
         result = await self.session.execute(
@@ -283,6 +298,24 @@ class SQLMemoryNodeMappingRepository(IMemoryNodeMappingRepository):
         )
         return [mapping_to_domain(r) for r in result.scalars().all()]
 
+    async def list_by_nodes(self, node_ids: List[uuid.UUID]) -> List[MemoryNodeMapping]:
+        if not node_ids:
+            return []
+        result = await self.session.execute(
+            select(MemoryNodeMappingTable).where(MemoryNodeMappingTable.node_id.in_(node_ids))
+        )
+        return [mapping_to_domain(r) for r in result.scalars().all()]
+
+    async def list_by_memories(self, memory_ids: List[uuid.UUID]) -> List[MemoryNodeMapping]:
+        if not memory_ids:
+            return []
+        result = await self.session.execute(
+            select(MemoryNodeMappingTable).where(MemoryNodeMappingTable.memory_id.in_(memory_ids))
+        )
+        return [mapping_to_domain(r) for r in result.scalars().all()]
+
+
+
 
 class SQLGraphRepository(IGraphRepository):
     """SQLAlchemy aggregated root repository wrapper with traversal method stubs."""
@@ -305,14 +338,53 @@ class SQLGraphRepository(IGraphRepository):
     def mappings(self) -> IMemoryNodeMappingRepository:
         return self._mappings
 
-    # --- Placeholder Implementations for Neighborhood / Traversal (Phase 4) ---
+    # --- Implementations for Neighborhood / Traversal (Phase 4) ---
 
     async def get_neighbors(
         self,
+        user_id: uuid.UUID,
         node_id: uuid.UUID,
+        direction: str = "both",
         relationship_types: Optional[List[RelationshipType]] = None,
     ) -> List[Tuple[Node, Relationship, Node]]:
-        return []
+        from sqlalchemy.orm import aliased
+
+        SourceNodeTable = aliased(NodeTable)
+        TargetNodeTable = aliased(NodeTable)
+
+        query = (
+            select(RelationshipTable, SourceNodeTable, TargetNodeTable)
+            .join(SourceNodeTable, RelationshipTable.source_node_id == SourceNodeTable.id)
+            .join(TargetNodeTable, RelationshipTable.target_node_id == TargetNodeTable.id)
+            .where(RelationshipTable.user_id == user_id)
+        )
+
+        if direction == "outgoing":
+            query = query.where(RelationshipTable.source_node_id == node_id)
+        elif direction == "incoming":
+            query = query.where(RelationshipTable.target_node_id == node_id)
+        else:  # both
+            query = query.where(
+                or_(
+                    RelationshipTable.source_node_id == node_id,
+                    RelationshipTable.target_node_id == node_id,
+                )
+            )
+
+        if relationship_types:
+            query = query.where(RelationshipTable.relationship_type.in_([rt.value for rt in relationship_types]))
+
+        result = await self.session.execute(query)
+        rows = result.all()
+
+        neighbors = []
+        for rel_tbl, src_tbl, tgt_tbl in rows:
+            neighbors.append((
+                to_domain(src_tbl),
+                relationship_to_domain(rel_tbl),
+                to_domain(tgt_tbl)
+            ))
+        return neighbors
 
     async def find_paths(
         self,
@@ -320,4 +392,48 @@ class SQLGraphRepository(IGraphRepository):
         target_node_id: uuid.UUID,
         max_depth: int = 3,
     ) -> List[List[Relationship]]:
-        return []
+        # Retrieve user context from source node
+        node_result = await self.session.execute(
+            select(NodeTable).where(NodeTable.id == source_node_id)
+        )
+        node_tbl = node_result.scalars().first()
+        if not node_tbl:
+            return []
+        user_id = node_tbl.user_id
+
+        # Batch load nodes & relationships
+        nodes = await self._entities.list_by_user(user_id, limit=100000)
+        relationships = await self._relationships.list_by_user(user_id, limit=100000)
+
+        from app.knowledge_graph.services.in_memory_graph import InMemoryGraph
+        graph = InMemoryGraph(nodes, relationships)
+
+        if source_node_id not in graph.nodes_by_id or target_node_id not in graph.nodes_by_id:
+            return []
+
+        paths = []
+        queue = [[(source_node_id, None)]]
+
+        while queue:
+            path = queue.pop(0)
+            curr_id, _ = path[-1]
+
+            if len(path) - 1 > max_depth:
+                continue
+
+            if curr_id == target_node_id:
+                rel_path = [r for _, r in path if r is not None]
+                paths.append(rel_path)
+                continue
+
+            neighbors = graph.get_filtered_neighbors(node_id=curr_id)
+            for src, rel, tgt in neighbors:
+                neighbor_node = tgt if src.id == curr_id else src
+                path_node_ids = {nid for nid, _ in path}
+                if neighbor_node.id not in path_node_ids:
+                    new_path = list(path)
+                    new_path.append((neighbor_node.id, rel))
+                    queue.append(new_path)
+
+        return paths
+

@@ -234,6 +234,15 @@ class SQLMemoryRepository(IMemoryRepository):
         table = result.scalars().first()
         return _to_domain(table) if table else None
 
+    async def get_by_ids(self, memory_ids: List[uuid.UUID]) -> List[Memory]:
+        if not memory_ids:
+            return []
+        result = await self.session.execute(
+            select(MemoryTable).where(MemoryTable.id.in_(memory_ids))
+        )
+        return [_to_domain(t) for t in result.scalars().all()]
+
+
     async def create(
         self,
         user_id: uuid.UUID,

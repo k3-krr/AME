@@ -67,9 +67,13 @@ def get_analytics_service(db: AsyncSession = Depends(get_db)) -> AnalyticsServic
     )
 
 
+from app.knowledge_graph.dependencies.graph_deps import get_hybrid_retrieval_service
+
+
 def get_memory_service(
     db: AsyncSession = Depends(get_db),
     ranking_service: RankingService = Depends(get_ranking_service),
+    hybrid_retrieval_service = Depends(get_hybrid_retrieval_service),
 ) -> MemoryService:
     """Dependency helper instantiating MemoryService with standard database repositories."""
     memory_repo = SQLMemoryRepository(db)
@@ -79,13 +83,30 @@ def get_memory_service(
 
     from app.domain.memory_router import MemoryRouter
     from app.infrastructure.repositories.sql_repos import SQLRepositoryFactory
-    from app.application.hybrid_retrieval_service import HybridRetrievalService
     from app.application.hybrid_ranking_service import HybridRankingService
 
     memory_router = MemoryRouter()
     repository_factory = SQLRepositoryFactory(db)
-    hybrid_retrieval_service = HybridRetrievalService(repository_factory)
     hybrid_ranking_service = HybridRankingService(ranking_service)
+
+    from fastapi.params import Depends as DependsClass
+    if isinstance(hybrid_retrieval_service, DependsClass) or hybrid_retrieval_service is None:
+        from app.application.hybrid_retrieval_service import HybridRetrievalService
+        try:
+            from app.knowledge_graph.services.expansion_service import KnowledgeGraphExpansionService
+            from app.knowledge_graph.repositories.sql_repositories import SQLGraphRepository
+            from app.application.graph_aware_hybrid_retrieval_service import GraphAwareHybridRetrievalService
+            
+            base_ret = HybridRetrievalService(repository_factory)
+            graph_repo = SQLGraphRepository(db)
+            exp_service = KnowledgeGraphExpansionService(graph_repo)
+            hybrid_retrieval_service = GraphAwareHybridRetrievalService(
+                base_retrieval_service=base_ret,
+                expansion_service=exp_service,
+                memory_repo=memory_repo,
+            )
+        except Exception:
+            hybrid_retrieval_service = HybridRetrievalService(repository_factory)
 
     return MemoryService(
         memory_repo=memory_repo,

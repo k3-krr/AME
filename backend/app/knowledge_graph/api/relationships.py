@@ -4,7 +4,10 @@ from typing import List, Optional
 from fastapi import APIRouter, status, Query, Depends, HTTPException, Response
 
 from app.presentation.api.auth import get_current_user
+from app.infrastructure.db.session import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.infrastructure.db.models import UserTable
+from app.infrastructure.repositories.sql_repos import SQLMemoryRepository
 from app.knowledge_graph.domain.entities import RelationshipType
 from app.knowledge_graph.schemas.schemas import (
     RelationshipCreateRequest,
@@ -12,13 +15,20 @@ from app.knowledge_graph.schemas.schemas import (
     RelationshipResponse,
 )
 from app.knowledge_graph.services.relationship_service import RelationshipService
-from app.knowledge_graph.dependencies.graph_deps import get_relationship_service
+from app.knowledge_graph.dependencies.graph_deps import (
+    get_relationship_service,
+    get_graph_service,
+    get_entity_service,
+    get_relationship_extraction_service
+)
+from app.knowledge_graph.services.relationship_extraction_service import RelationshipExtractionService
 from app.knowledge_graph.exceptions import (
     RelationshipNotFoundError,
     EntityNotFoundError,
     DuplicateRelationshipError,
 )
 from app.presentation.api.schemas import StandardErrorResponse
+
 
 logger = logging.getLogger("ame_backend.api.kg_relationships")
 
@@ -241,3 +251,65 @@ async def delete_relationship(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete relationship."
         )
+
+
+@router.post(
+    "/memories/{memory_id}/relationships/extract",
+    response_model=List[RelationshipResponse],
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Relationship extraction from memory executed successfully"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden memory ownership check"},
+        404: {"model": StandardErrorResponse, "description": "Memory not found"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def manual_extract_relationships_from_memory(
+    memory_id: uuid.UUID,
+    current_user: UserTable = Depends(get_current_user),
+    relationship_extraction_service: RelationshipExtractionService = Depends(get_relationship_extraction_service),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Manually triggers relationship extraction on a specific memory record.
+    """
+    try:
+        # 1. Fetch memory and verify owner
+        memory_repo = SQLMemoryRepository(db)
+        memory = await memory_repo.get_by_id(memory_id)
+        if not memory:
+            raise KeyError(f"Memory with ID {memory_id} not found.")
+        if memory.user_id != current_user.id:
+            raise PermissionError("Access forbidden: User does not own the memory")
+
+        # 2. Fetch mapped node IDs from GraphService
+        graph_service = get_graph_service(db)
+        mappings = await graph_service.list_mappings_by_memory(current_user.id, memory_id)
+        
+        # 3. Retrieve full Node structures
+        nodes = []
+        entity_service = get_entity_service(db)
+        for mapping in mappings:
+            node = await entity_service.get_entity(current_user.id, mapping.node_id)
+            if node:
+                nodes.append(node)
+
+        # 4. Extract relationships
+        relationships = await relationship_extraction_service.extract_and_build_relationships(
+            user_id=current_user.id,
+            memory_id=memory_id,
+            content=memory.content,
+            nodes=nodes
+        )
+
+        return relationships
+
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        logger.error(f"Manual relationship extraction failed: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to run relationship extraction.")
+

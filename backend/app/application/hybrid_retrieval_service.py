@@ -1,5 +1,6 @@
 """Hybrid Retrieval Service for merging and deduplicating memories across system tiers (Milestone 7 Phase 4)."""
 
+import abc
 import logging
 import uuid
 from typing import List, Optional
@@ -10,7 +11,7 @@ from app.domain.repositories import IRepositoryFactory
 logger = logging.getLogger("ame_backend.application.hybrid_retrieval_service")
 
 
-class HybridRetrievalService:
+class HybridRetrievalService(metaclass=abc.ABCMeta):
     """
     Application service managing unified retrieval across multiple hybrid memory repositories.
     It orchestrates queries across Semantic, Episodic, Procedural, and Working tiers,

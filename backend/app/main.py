@@ -14,6 +14,9 @@ from app.presentation.api.memories import router as memories_router
 from app.presentation.api.extractions import router as extractions_router
 from app.knowledge_graph.api.entities import router as kg_entities_router
 from app.knowledge_graph.api.relationships import router as kg_relationships_router
+from app.knowledge_graph.api.traversal import router as kg_traversal_router
+from app.retrieval.api.router import router as retrieval_router
+
 
 
 
@@ -154,5 +157,8 @@ app.include_router(memories_router, prefix=settings.API_V1_PREFIX)
 app.include_router(extractions_router, prefix=settings.API_V1_PREFIX)
 app.include_router(kg_entities_router, prefix=settings.API_V1_PREFIX)
 app.include_router(kg_relationships_router, prefix=settings.API_V1_PREFIX)
+app.include_router(kg_traversal_router, prefix=settings.API_V1_PREFIX)
+app.include_router(retrieval_router, prefix=settings.API_V1_PREFIX)
+
 
 

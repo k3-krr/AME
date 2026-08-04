@@ -1,7 +1,8 @@
 import abc
 import uuid
 from datetime import datetime
-from typing import AsyncGenerator, Optional, Protocol
+from typing import AsyncGenerator, Optional, Protocol, List
+
 
 from app.infrastructure.db.models import UserTable, ConversationTable, MessageTable, AuthSessionTable
 from app.domain.entities import (
@@ -126,6 +127,14 @@ class IMemoryRepository(abc.ABC):
     @abc.abstractmethod
     async def get_by_id(self, memory_id: uuid.UUID) -> Optional[Memory]:
         raise NotImplementedError()
+
+    async def get_by_ids(self, memory_ids: List[uuid.UUID]) -> List[Memory]:
+        """Fetch memories in batch with default parallel lookup to keep mock compatibility."""
+        import asyncio
+        tasks = [self.get_by_id(mid) for mid in memory_ids]
+        results = await asyncio.gather(*tasks)
+        return [m for m in results if m is not None]
+
 
     @abc.abstractmethod
     async def create(

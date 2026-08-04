@@ -1,6 +1,8 @@
 import os
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 
 class AppSettings(BaseSettings):
@@ -77,6 +79,49 @@ class AppSettings(BaseSettings):
     # Mix factors
     W_HYBRID_ADAPTIVE: float = 0.5
     W_HYBRID_SYSTEM: float = 0.5
+
+    # Knowledge Graph Settings
+    GRAPH_MAX_TRAVERSAL_DEPTH: int = 5
+    GRAPH_EXPANSION_ENABLED: bool = True
+    GRAPH_EXPANSION_MAX_DEPTH: int = 2
+    GRAPH_EXPANSION_MAX_MEMORIES: int = 50
+    GRAPH_EXPANSION_MAX_NODES: int = 20
+    GRAPH_EXPANSION_DECAY: float = 0.9
+    GRAPH_EXPANSION_STRATEGY: str = "BFS"
+
+    @field_validator("GRAPH_EXPANSION_DECAY")
+    @classmethod
+    def validate_decay(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("GRAPH_EXPANSION_DECAY must be between 0.0 and 1.0 inclusive")
+        return v
+
+    @field_validator("GRAPH_EXPANSION_STRATEGY")
+    @classmethod
+    def validate_strategy(cls, v: str) -> str:
+        v_upper = v.upper()
+        if v_upper not in ("BFS", "DFS"):
+            raise ValueError("GRAPH_EXPANSION_STRATEGY must be either 'BFS' or 'DFS'")
+        return v_upper
+
+    @field_validator(
+        "GRAPH_EXPANSION_MAX_DEPTH",
+        "GRAPH_EXPANSION_MAX_MEMORIES",
+        "GRAPH_EXPANSION_MAX_NODES",
+        "GRAPH_MAX_TRAVERSAL_DEPTH"
+    )
+    @classmethod
+    def validate_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Graph limit setting must be non-negative")
+        return v
+
+
+
+
+    # Retrieval Platform Configurations (Milestone 9)
+    RETRIEVAL_DEFAULT_STRATEGY: str = "standard_rag"
+    RETRIEVAL_MAX_ELEMENTS: int = 20
 
     # Settings config path mapping to .env file if available
     model_config = SettingsConfigDict(

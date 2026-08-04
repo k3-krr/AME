@@ -13,6 +13,13 @@ class IEntityRepository(abc.ABC):
     async def get_by_id(self, entity_id: uuid.UUID) -> Optional[Node]:
         raise NotImplementedError()
 
+    async def get_by_ids(self, entity_ids: List[uuid.UUID]) -> List[Node]:
+        import asyncio
+        tasks = [self.get_by_id(eid) for eid in entity_ids]
+        results = await asyncio.gather(*tasks)
+        return [n for n in results if n is not None]
+
+
     @abc.abstractmethod
     async def get_by_name(self, user_id: uuid.UUID, canonical_name: str) -> Optional[Node]:
         raise NotImplementedError()
@@ -110,6 +117,21 @@ class IMemoryNodeMappingRepository(abc.ABC):
     async def list_by_node(self, node_id: uuid.UUID) -> List[MemoryNodeMapping]:
         raise NotImplementedError()
 
+    async def list_by_nodes(self, node_ids: List[uuid.UUID]) -> List[MemoryNodeMapping]:
+        import asyncio
+        tasks = [self.list_by_node(nid) for nid in node_ids]
+        results = await asyncio.gather(*tasks)
+        flat_list = []
+        for items in results:
+            flat_list.extend(items)
+        return flat_list
+
+    @abc.abstractmethod
+    async def list_by_memories(self, memory_ids: List[uuid.UUID]) -> List[MemoryNodeMapping]:
+        raise NotImplementedError()
+
+
+
 
 class IGraphRepository(abc.ABC):
     """
@@ -137,7 +159,9 @@ class IGraphRepository(abc.ABC):
     @abc.abstractmethod
     async def get_neighbors(
         self,
+        user_id: uuid.UUID,
         node_id: uuid.UUID,
+        direction: str = "both",
         relationship_types: Optional[List[RelationshipType]] = None,
     ) -> List[Tuple[Node, Relationship, Node]]:
         """Placeholder for neighborhood discovery and multi-hop node adjacency list fetches."""

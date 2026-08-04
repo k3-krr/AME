@@ -35,6 +35,7 @@ class RelationshipType(str, Enum):
     PART_OF = "PART_OF"
     CREATED_BY = "CREATED_BY"
     LOCATED_IN = "LOCATED_IN"
+    INDEXED_BY = "INDEXED_BY"
     CUSTOM = "CUSTOM"
 
 
@@ -62,6 +63,8 @@ def normalize_canonical_name(name: str) -> str:
         "springboot": "spring boot",
         "adaptive memory engine": "ame",
         "semantic memory engine": "sme",
+        "indexed by": "indexed_by",
+        "indexed": "indexed_by",
     }
     return alias_map.get(cleaned, cleaned)
 
@@ -127,12 +130,13 @@ class Relationship:
         self.metadata = metadata or {}
         self.created_at = created_at or datetime.utcnow()
 
-    def validate(self) -> None:
+    def validate(self, prevent_self_loops: bool = True) -> None:
         """Validates relationship entity rules."""
         if not (0.0 <= self.confidence <= 1.0):
             raise ValueError("Confidence must be between 0.0 and 1.0 inclusive")
-        if self.source_node_id == self.target_node_id:
+        if prevent_self_loops and self.source_node_id == self.target_node_id:
             raise ValueError("Self-referential loops are not allowed in relationships")
+
 
 
 class MemoryNodeMapping:
