@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field
 
-from app.domain.entities import MemoryType, MemoryStatus
+from app.domain.entities import MemoryType, MemoryStatus, AgentStatus
 from app.domain.memory_system import MemorySystem
 
 
@@ -227,6 +227,39 @@ class ReprocessRequest(BaseModel):
 class ReprocessResponse(BaseModel):
     """Schema representing outcome of batch reprocessing execution."""
     reprocessed_count: int
+
+
+# --- Agent Schemas ---
+
+class AgentCreateRequest(BaseModel):
+    """Schema representing a request to create a new agent."""
+    name: str = Field(..., min_length=1, max_length=100, description="The descriptive name of the agent")
+    description: Optional[str] = Field(None, description="Optional description of the agent's purpose")
+    configuration: Optional[dict] = Field(None, description="Optional provider-agnostic configuration object")
+
+
+class AgentUpdateRequest(BaseModel):
+    """Schema representing a request to update an existing agent."""
+    name: Optional[str] = Field(None, min_length=1, max_length=100, description="Updated name of the agent")
+    description: Optional[str] = Field(None, description="Updated description")
+    configuration: Optional[dict] = Field(None, description="Updated configuration dictionary")
+
+
+class AgentResponse(BaseModel):
+    """Schema representing an agent record response."""
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    name: str
+    description: Optional[str]
+    status: AgentStatus
+    configuration: dict
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
 
 
 

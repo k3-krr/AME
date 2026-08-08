@@ -164,3 +164,37 @@ class MemoryExtractionCandidate:
     target_memory_id: Optional[uuid.UUID] = None
 
 
+class AgentStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    REVOKED = "REVOKED"
+
+
+@dataclass
+class Agent:
+    """
+    Agent Domain Entity.
+
+    Phase 1 compatibility ownership boundary: tenant_id is represented by the 
+    authenticated user's ID because AME does not yet have a first-class Tenant entity.
+    This design is a compatibility mapping rather than implying User == Tenant,
+    allowing a real Tenant context to be introduced in the future without changing Agent.
+    """
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    name: str
+    description: Optional[str]
+    status: AgentStatus
+    configuration: dict
+    created_at: datetime
+    updated_at: datetime
+
+    def validate(self) -> None:
+        """Validates Agent domain rules."""
+        if not self.name or not self.name.strip():
+            raise ValueError("Agent name cannot be empty")
+        if not self.tenant_id:
+            raise ValueError("tenant_id is required")
+
+
+

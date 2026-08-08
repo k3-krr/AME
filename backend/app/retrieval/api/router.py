@@ -20,8 +20,18 @@ from app.retrieval.application.retrieval_orchestrator import RetrievalOrchestrat
 from app.retrieval.application.query_understanding_service import QueryUnderstandingService
 from app.retrieval.application.query_rewrite_service import QueryRewriteService
 from app.retrieval.application.grounding_service import GroundingService
+from app.retrieval.application.telemetry import RetrievalTelemetryTracker
+from app.config import settings
 
 router = APIRouter(prefix="/retrieval", tags=["retrieval"])
+
+
+def validate_query_length(query: str) -> None:
+    if len(query) > settings.RETRIEVAL_MAX_QUERY_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Query length exceeds the maximum allowed limit of {settings.RETRIEVAL_MAX_QUERY_LENGTH} characters."
+        )
 
 
 @router.post(
@@ -37,6 +47,7 @@ async def retrieve_context(
     """
     Retrieves grounded context elements based on query criteria and dynamic capability execution.
     """
+    validate_query_length(payload.query)
     try:
         package = await orchestrator.retrieve(
             user_id=current_user.id,
@@ -49,6 +60,8 @@ async def retrieve_context(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except StrategyNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except TimeoutError as e:
+        raise HTTPException(status_code=status.HTTP_408_REQUEST_TIMEOUT, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -70,13 +83,20 @@ async def ground_retrieval(
     """
     Executes E2E context retrieval and formats outputs into a vendor-neutral prompt package.
     """
+    validate_query_length(payload.query)
+    
+    # Instantiate overall pipeline telemetry tracker
+    request_id = uuid.uuid4()
+    tracker = RetrievalTelemetryTracker(request_id)
+    
     try:
-        # 1. Run context retrieval E2E
+        # 1. Run context retrieval E2E passing external tracker
         context_package = await retrieval_orchestrator.retrieve(
             user_id=current_user.id,
             query=payload.query,
             conversation_id=payload.conversation_id,
             options=payload.options or {},
+            tracker=tracker,
         )
         
         # 2. Extract options configurations
@@ -90,11 +110,27 @@ async def ground_retrieval(
             context_package=context_package,
             base_system_prompt=base_prompt,
             max_context_chars=max_chars,
+            tracker=tracker,
         )
+        
+        tracker.log_metrics()
         return prompt_package
     except ValueError as e:
+        tracker.success = False
+        if not tracker.validation_failure_category:
+            tracker.validation_failure_category = "invalid_arguments"
+        tracker.log_metrics()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except TimeoutError as e:
+        tracker.success = False
+        tracker.error_category = "request_timeout"
+        tracker.log_metrics()
+        raise HTTPException(status_code=status.HTTP_408_REQUEST_TIMEOUT, detail=str(e))
     except Exception as e:
+        tracker.success = False
+        if not tracker.error_category:
+            tracker.error_category = "system_failure"
+        tracker.log_metrics()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prompt grounding execution failed: {str(e)}"
@@ -114,6 +150,7 @@ async def analyze_query(
     """
     Diagnostic endpoint to normalize, detect intent, and classify capabilities for a raw query.
     """
+    validate_query_length(payload.query)
     try:
         return service.analyze_query(payload.query)
     except ValueError as e:
@@ -138,6 +175,7 @@ async def rewrite_query(
     """
     Diagnostic endpoint to normalize, rewrite, expand, and generate subqueries for a raw query.
     """
+    validate_query_length(payload.query)
     try:
         return service.rewrite_query(payload.query)
     except ValueError as e:

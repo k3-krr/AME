@@ -1,7 +1,7 @@
 import abc
 import uuid
 from typing import List, Dict, Any, Optional, Tuple
-from app.retrieval.domain.value_objects import ContextFusionElement, Citation, GroundedPromptPackage
+from app.retrieval.domain.value_objects import ContextFusionElement, Citation, GroundedPromptPackage, PipelineStatus
 
 
 class IContextCompressor(abc.ABC):
@@ -59,7 +59,6 @@ class DefaultContextCompressor(IContextCompressor):
             else:
                 break
         return compressed
-
 
 
 class DefaultCitationBuilder(ICitationBuilder):
@@ -127,6 +126,8 @@ class DefaultGroundedContextValidator(IGroundedContextValidator):
             raise ValueError("request_id is required")
         if not package.user_query or not package.user_query.strip():
             raise ValueError("user_query is required")
+        if not package.status or package.status not in PipelineStatus.__members__:
+            raise ValueError(f"Invalid pipeline status: {package.status}")
         
         # Validate citation indexes are sequential starting at 1
         for idx, cit in enumerate(package.citations, start=1):

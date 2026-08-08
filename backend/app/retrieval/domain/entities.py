@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from app.domain.entities import Memory
-from app.retrieval.domain.value_objects import ContextFusionElement
+from app.retrieval.domain.value_objects import ContextFusionElement, PipelineStatus
 
 @dataclass
 class RetrievalRequest:
@@ -30,3 +30,4 @@ class GroundedContextPackage:
     fused_elements: List[ContextFusionElement]
     metadata: Dict[str, Any] = field(default_factory=dict)
     compiled_at: datetime = field(default_factory=datetime.utcnow)
+    status: PipelineStatus = PipelineStatus.SUCCESS

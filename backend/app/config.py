@@ -122,6 +122,9 @@ class AppSettings(BaseSettings):
     # Retrieval Platform Configurations (Milestone 9)
     RETRIEVAL_DEFAULT_STRATEGY: str = "standard_rag"
     RETRIEVAL_MAX_ELEMENTS: int = 20
+    RETRIEVAL_TIMEOUT_SECONDS: float = 5.0
+    RETRIEVAL_MAX_QUERY_LENGTH: int = 1000
+
 
     # Settings config path mapping to .env file if available
     model_config = SettingsConfigDict(

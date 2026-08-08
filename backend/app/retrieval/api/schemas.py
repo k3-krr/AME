@@ -17,6 +17,7 @@ class GroundedContextPackageDto(BaseModel):
     fused_elements: List[ContextElementDto]
     metadata: Dict[str, Any]
     compiled_at: datetime
+    status: str = "SUCCESS"
 
     class Config:
         from_attributes = True
@@ -75,6 +76,7 @@ class GroundedPromptPackageDto(BaseModel):
     citations: List[CitationDto]
     grounding_metadata: Dict[str, Any]
     compiled_at: datetime
+    status: str = "SUCCESS"
 
     class Config:
         from_attributes = True

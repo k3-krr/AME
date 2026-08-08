@@ -19,6 +19,7 @@ from app.domain.repositories import (
     IMemoryStateRepository,
     IMemoryAccessLogRepository,
     IMemoryExtractionRepository,
+    IAgentRepository,
 )
 from app.infrastructure.db.models import (
     UserTable,
@@ -31,6 +32,7 @@ from app.infrastructure.db.models import (
     MemoryAccessLogTable,
     MemoryExtractionTable,
     MemoryExtractionCandidateTable,
+    AgentTable,
 )
 from app.domain.embedding import MemoryEmbedding
 from app.domain.entities import (
@@ -44,6 +46,8 @@ from app.domain.entities import (
     MemoryExtractionCandidate,
     ExtractionStatus,
     ExtractionAction,
+    Agent,
+    AgentStatus,
 )
 from app.domain.memory_system import MemorySystem
 
@@ -1115,6 +1119,108 @@ class SQLMemoryExtractionRepository(IMemoryExtractionRepository):
             .offset(offset)
         )
         return [_to_domain_extraction(t) for t in result.scalars().all()]
+
+
+def _to_domain_agent(table: AgentTable) -> Agent:
+    """Helper mapper translating SQLAlchemy AgentTable model to pure domain Agent entity."""
+    return Agent(
+        id=table.id,
+        tenant_id=table.tenant_id,
+        name=table.name,
+        description=table.description,
+        status=AgentStatus(table.status),
+        configuration=table.configuration,
+        created_at=table.created_at,
+        updated_at=table.updated_at,
+    )
+
+
+class SQLAgentRepository(IAgentRepository):
+    """SQLAlchemy concrete implementation of the IAgentRepository contract.
+
+    Notice: Responsibility is DATA ACCESS ONLY. Authorization logic belongs to application/domain layer.
+    """
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_id(self, agent_id: uuid.UUID) -> Optional[Agent]:
+        result = await self.session.execute(
+            select(AgentTable).where(AgentTable.id == agent_id)
+        )
+        table = result.scalars().first()
+        return _to_domain_agent(table) if table else None
+
+    async def create(
+        self,
+        tenant_id: uuid.UUID,
+        name: str,
+        description: Optional[str],
+        status: AgentStatus,
+        configuration: dict,
+    ) -> Agent:
+        table = AgentTable(
+            tenant_id=tenant_id,
+            name=name,
+            description=description,
+            status=status.value,
+            configuration=configuration,
+        )
+        self.session.add(table)
+        await self.session.flush()  # Populate auto fields
+        await self.session.refresh(table)
+        return _to_domain_agent(table)
+
+    async def update(
+        self,
+        agent_id: uuid.UUID,
+        name: Optional[str],
+        description: Optional[str],
+        configuration: Optional[dict],
+    ) -> Optional[Agent]:
+        result = await self.session.execute(
+            select(AgentTable).where(AgentTable.id == agent_id)
+        )
+        table = result.scalars().first()
+        if not table:
+            return None
+
+        if name is not None:
+            table.name = name
+        if description is not None:
+            table.description = description
+        if configuration is not None:
+            table.configuration = configuration
+
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_agent(table)
+
+    async def update_status(
+        self,
+        agent_id: uuid.UUID,
+        status: AgentStatus,
+    ) -> Optional[Agent]:
+        result = await self.session.execute(
+            select(AgentTable).where(AgentTable.id == agent_id)
+        )
+        table = result.scalars().first()
+        if not table:
+            return None
+
+        table.status = status.value
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_agent(table)
+
+    async def list_by_tenant(self, tenant_id: uuid.UUID) -> List[Agent]:
+        result = await self.session.execute(
+            select(AgentTable)
+            .where(AgentTable.tenant_id == tenant_id)
+            .order_by(asc(AgentTable.created_at))
+        )
+        return [_to_domain_agent(t) for t in result.scalars().all()]
+
 
 
 

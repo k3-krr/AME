@@ -235,6 +235,39 @@ class MemoryExtractionCandidateTable(Base):
     memory: Mapped[Optional["MemoryTable"]] = relationship()
 
 
+class AgentTable(Base):
+    __tablename__ = "agents"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('ACTIVE', 'SUSPENDED', 'REVOKED')",
+            name="check_agent_status"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    
+    # Phase 1 compatibility ownership boundary: tenant_id is represented by the 
+    # authenticated user's ID because AME does not yet have a first-class Tenant entity.
+    # This design is a compatibility mapping rather than implying User == Tenant conceptually.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False
+    )
+    
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="ACTIVE")
+    configuration: Mapped[dict] = mapped_column(JSON, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # ORM Relationship
+    tenant: Mapped["UserTable"] = relationship()
+
+
 # Register Knowledge Graph Bounded Context models
 from app.knowledge_graph.models.models import NodeTable, RelationshipTable, MemoryNodeMappingTable
 

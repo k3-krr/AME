@@ -15,6 +15,8 @@ from app.domain.entities import (
     MemoryExtractionCandidate,
     ExtractionStatus,
     ExtractionAction,
+    Agent,
+    AgentStatus,
 )
 from app.domain.memory_system import MemorySystem
 from app.domain.embedding import MemoryEmbedding
@@ -476,6 +478,48 @@ class IMemoryExtractionRepository(abc.ABC):
         self, conversation_id: uuid.UUID, page: int = 1, limit: int = 20
     ) -> list[MemoryExtraction]:
         raise NotImplementedError()
+
+
+class IAgentRepository(abc.ABC):
+    """Domain repository contract managing Agent records."""
+
+    @abc.abstractmethod
+    async def get_by_id(self, agent_id: uuid.UUID) -> Optional[Agent]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def create(
+        self,
+        tenant_id: uuid.UUID,
+        name: str,
+        description: Optional[str],
+        status: AgentStatus,
+        configuration: dict,
+    ) -> Agent:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def update(
+        self,
+        agent_id: uuid.UUID,
+        name: Optional[str],
+        description: Optional[str],
+        configuration: Optional[dict],
+    ) -> Optional[Agent]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def update_status(
+        self,
+        agent_id: uuid.UUID,
+        status: AgentStatus,
+    ) -> Optional[Agent]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_by_tenant(self, tenant_id: uuid.UUID) -> List[Agent]:
+        raise NotImplementedError()
+
 
 
 

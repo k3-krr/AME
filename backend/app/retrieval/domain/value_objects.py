@@ -33,6 +33,12 @@ class RetrievalQuerySource(str, Enum):
     GENERATOR = "GENERATOR"
 
 
+class PipelineStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    DEGRADED = "DEGRADED"
+    FAILED = "FAILED"
+
+
 @dataclass(frozen=True)
 class ContextFusionElement:
     """Identifies fused, deduplicated memories augmented with retrieval score and provenance."""
@@ -109,3 +115,4 @@ class GroundedPromptPackage:
     citations: List[Citation]
     grounding_metadata: Dict[str, Any] = field(default_factory=dict)
     compiled_at: datetime = field(default_factory=datetime.utcnow)
+    status: PipelineStatus = PipelineStatus.SUCCESS
