@@ -100,15 +100,26 @@ async def test_api_retrieve_context_404_no_strategy(client: AsyncClient):
     )
     assert reg_response.status_code == 201
 
-    # Call endpoint with a strategy name. Since no strategies are registered in Phase 1,
-    # this will raise StrategyNotFoundError and return 404.
-    response = await client.post(
-        "/api/v1/retrieval/retrieve",
-        json={"query": "test query", "options": {"strategy": "standard_rag"}}
-    )
-    assert response.status_code == 404
-    assert "no valid retrieval strategy" in response.json()["message"].lower()
+    # Mock the orchestrator to raise StrategyNotFoundError
+    from app.main import app
+    from app.retrieval.dependencies import get_retrieval_orchestrator
+    
+    class MockFailureOrchestrator:
+        async def retrieve(self, user_id, query, conversation_id=None, options=None):
+            raise StrategyNotFoundError("no valid retrieval strategy")
 
+    app.dependency_overrides[get_retrieval_orchestrator] = lambda: MockFailureOrchestrator()
+
+    try:
+        response = await client.post(
+            "/api/v1/retrieval/retrieve",
+            json={"query": "test query", "options": {"strategy": "standard_rag"}}
+        )
+        assert response.status_code == 404
+        assert "no valid retrieval strategy" in response.json()["message"].lower()
+    finally:
+        if get_retrieval_orchestrator in app.dependency_overrides:
+            del app.dependency_overrides[get_retrieval_orchestrator]
 
 
 @pytest.mark.asyncio
@@ -121,10 +132,20 @@ async def test_api_retrieve_context_success_with_override(client: AsyncClient):
     )
     assert reg_response.status_code == 201
 
-    # Setup DI override to inject MockStrategy
+    # Mock the orchestrator to return a mock package
     from app.main import app
-    from app.retrieval.dependencies import get_retrieval_strategies
-    app.dependency_overrides[get_retrieval_strategies] = lambda: [MockStrategy()]
+    from app.retrieval.dependencies import get_retrieval_orchestrator
+    
+    class MockSuccessOrchestrator:
+        async def retrieve(self, user_id, query, conversation_id=None, options=None):
+            return GroundedContextPackage(
+                request_id=uuid.uuid4(),
+                retrieved_memories=[],
+                fused_elements=[],
+                metadata={"executed": True}
+            )
+
+    app.dependency_overrides[get_retrieval_orchestrator] = lambda: MockSuccessOrchestrator()
 
     try:
         response = await client.post(
@@ -138,6 +159,7 @@ async def test_api_retrieve_context_success_with_override(client: AsyncClient):
         assert data["metadata"]["executed"] is True
     finally:
         # Clean up overrides so other tests are not affected
-        if get_retrieval_strategies in app.dependency_overrides:
-            del app.dependency_overrides[get_retrieval_strategies]
+        if get_retrieval_orchestrator in app.dependency_overrides:
+            del app.dependency_overrides[get_retrieval_orchestrator]
+
 
