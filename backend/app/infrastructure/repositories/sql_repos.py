@@ -20,6 +20,8 @@ from app.domain.repositories import (
     IMemoryAccessLogRepository,
     IMemoryExtractionRepository,
     IAgentRepository,
+    IAgentCredentialRepository,
+    IMemoryAccessGrantRepository,
 )
 from app.infrastructure.db.models import (
     UserTable,
@@ -33,6 +35,8 @@ from app.infrastructure.db.models import (
     MemoryExtractionTable,
     MemoryExtractionCandidateTable,
     AgentTable,
+    AgentCredentialTable,
+    MemoryAccessGrantTable,
 )
 from app.domain.embedding import MemoryEmbedding
 from app.domain.entities import (
@@ -48,6 +52,11 @@ from app.domain.entities import (
     ExtractionAction,
     Agent,
     AgentStatus,
+    AgentCredential,
+    PrincipalType,
+    AccessContext,
+    MemoryAccessLevel,
+    MemoryAccessGrant,
 )
 from app.domain.memory_system import MemorySystem
 
@@ -222,6 +231,7 @@ def _to_domain(table: MemoryTable) -> Memory:
         memory_system=MemorySystem(table.memory_system),
         occurred_at=table.occurred_at,
         expires_at=table.expires_at,
+        agent_id=table.agent_id,
     )
 
 
@@ -262,6 +272,7 @@ class SQLMemoryRepository(IMemoryRepository):
         memory_system: MemorySystem = MemorySystem.SEMANTIC,
         occurred_at: Optional[datetime] = None,
         expires_at: Optional[datetime] = None,
+        agent_id: Optional[uuid.UUID] = None,
     ) -> Memory:
         table = MemoryTable(
             user_id=user_id,
@@ -277,6 +288,7 @@ class SQLMemoryRepository(IMemoryRepository):
             memory_system=memory_system.value,
             occurred_at=occurred_at,
             expires_at=expires_at,
+            agent_id=agent_id,
         )
         self.session.add(table)
         await self.session.flush()
@@ -1134,6 +1146,90 @@ def _to_domain_agent(table: AgentTable) -> Agent:
         updated_at=table.updated_at,
     )
 
+def _to_domain_credential(table: AgentCredentialTable) -> AgentCredential:
+    """Helper mapper translating SQLAlchemy AgentCredentialTable model to pure domain AgentCredential entity."""
+    return AgentCredential(
+        id=table.id,
+        agent_id=table.agent_id,
+        credential_hash=table.credential_hash,
+        description=table.description,
+        created_at=table.created_at,
+        expires_at=table.expires_at,
+        revoked_at=table.revoked_at,
+        last_used_at=table.last_used_at,
+    )
+
+
+class SQLAgentCredentialRepository(IAgentCredentialRepository):
+    """SQLAlchemy concrete implementation of the IAgentCredentialRepository contract."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_id(self, credential_id: uuid.UUID) -> Optional[AgentCredential]:
+        result = await self.session.execute(
+            select(AgentCredentialTable).where(AgentCredentialTable.id == credential_id)
+        )
+        table = result.scalars().first()
+        return _to_domain_credential(table) if table else None
+
+    async def get_by_hash(self, credential_hash: str) -> Optional[AgentCredential]:
+        result = await self.session.execute(
+            select(AgentCredentialTable).where(AgentCredentialTable.credential_hash == credential_hash)
+        )
+        table = result.scalars().first()
+        return _to_domain_credential(table) if table else None
+
+    async def create(
+        self,
+        agent_id: uuid.UUID,
+        credential_hash: str,
+        description: Optional[str],
+        expires_at: Optional[datetime],
+    ) -> AgentCredential:
+        table = AgentCredentialTable(
+            agent_id=agent_id,
+            credential_hash=credential_hash,
+            description=description,
+            expires_at=expires_at,
+        )
+        self.session.add(table)
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_credential(table)
+
+    async def revoke(self, credential_id: uuid.UUID) -> Optional[AgentCredential]:
+        result = await self.session.execute(
+            select(AgentCredentialTable).where(AgentCredentialTable.id == credential_id)
+        )
+        table = result.scalars().first()
+        if not table:
+            return None
+
+        table.revoked_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_credential(table)
+
+    async def list_by_agent(self, agent_id: uuid.UUID) -> List[AgentCredential]:
+        result = await self.session.execute(
+            select(AgentCredentialTable)
+            .where(AgentCredentialTable.agent_id == agent_id)
+            .order_by(asc(AgentCredentialTable.created_at))
+        )
+        return [_to_domain_credential(t) for t in result.scalars().all()]
+
+    async def update_last_used(self, credential_id: uuid.UUID, last_used_at: datetime) -> None:
+        result = await self.session.execute(
+            select(AgentCredentialTable).where(AgentCredentialTable.id == credential_id)
+        )
+        table = result.scalars().first()
+        if table:
+            if last_used_at.tzinfo is None:
+                last_used_at = last_used_at.replace(tzinfo=timezone.utc)
+            table.last_used_at = last_used_at
+            await self.session.flush()
+
 
 class SQLAgentRepository(IAgentRepository):
     """SQLAlchemy concrete implementation of the IAgentRepository contract.
@@ -1220,6 +1316,97 @@ class SQLAgentRepository(IAgentRepository):
             .order_by(asc(AgentTable.created_at))
         )
         return [_to_domain_agent(t) for t in result.scalars().all()]
+
+
+def _to_domain_grant(table: MemoryAccessGrantTable) -> MemoryAccessGrant:
+    return MemoryAccessGrant(
+        id=table.id,
+        memory_id=table.memory_id,
+        agent_id=table.agent_id,
+        access_level=MemoryAccessLevel(table.access_level),
+        granted_by_principal_type=PrincipalType(table.granted_by_principal_type),
+        granted_by_user_id=table.granted_by_user_id,
+        granted_by_agent_id=table.granted_by_agent_id,
+        created_at=table.created_at,
+        expires_at=table.expires_at,
+        revoked_at=table.revoked_at,
+    )
+
+
+class SQLMemoryAccessGrantRepository(IMemoryAccessGrantRepository):
+    """SQLAlchemy concrete implementation of the IMemoryAccessGrantRepository contract."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_by_memory_and_agent(self, memory_id: uuid.UUID, agent_id: uuid.UUID) -> Optional[MemoryAccessGrant]:
+        result = await self.session.execute(
+            select(MemoryAccessGrantTable)
+            .where(MemoryAccessGrantTable.memory_id == memory_id)
+            .where(MemoryAccessGrantTable.agent_id == agent_id)
+        )
+        table = result.scalars().first()
+        return _to_domain_grant(table) if table else None
+
+    async def save(self, grant: MemoryAccessGrant) -> MemoryAccessGrant:
+        result = await self.session.execute(
+            select(MemoryAccessGrantTable)
+            .where(MemoryAccessGrantTable.memory_id == grant.memory_id)
+            .where(MemoryAccessGrantTable.agent_id == grant.agent_id)
+        )
+        table = result.scalars().first()
+        if table:
+            # Update existing record for Upsert behavior
+            table.access_level = grant.access_level.value
+            table.granted_by_principal_type = grant.granted_by_principal_type.value
+            table.granted_by_user_id = grant.granted_by_user_id
+            table.granted_by_agent_id = grant.granted_by_agent_id
+            table.expires_at = grant.expires_at
+            table.revoked_at = grant.revoked_at
+        else:
+            table = MemoryAccessGrantTable(
+                id=grant.id,
+                memory_id=grant.memory_id,
+                agent_id=grant.agent_id,
+                access_level=grant.access_level.value,
+                granted_by_principal_type=grant.granted_by_principal_type.value,
+                granted_by_user_id=grant.granted_by_user_id,
+                granted_by_agent_id=grant.granted_by_agent_id,
+                expires_at=grant.expires_at,
+                revoked_at=grant.revoked_at,
+            )
+            self.session.add(table)
+
+        await self.session.flush()
+        await self.session.refresh(table)
+        return _to_domain_grant(table)
+
+    async def list_active_by_memory(self, memory_id: uuid.UUID) -> List[MemoryAccessGrant]:
+        result = await self.session.execute(
+            select(MemoryAccessGrantTable)
+            .where(MemoryAccessGrantTable.memory_id == memory_id)
+            .where(MemoryAccessGrantTable.revoked_at.is_(None))
+        )
+        return [
+            g for g in [_to_domain_grant(t) for t in result.scalars().all()]
+            if g.is_active(datetime.now(timezone.utc))
+        ]
+
+    async def get_active_grant(self, memory_id: uuid.UUID, agent_id: uuid.UUID) -> Optional[MemoryAccessGrant]:
+        result = await self.session.execute(
+            select(MemoryAccessGrantTable)
+            .where(MemoryAccessGrantTable.memory_id == memory_id)
+            .where(MemoryAccessGrantTable.agent_id == agent_id)
+            .where(MemoryAccessGrantTable.revoked_at.is_(None))
+        )
+        table = result.scalars().first()
+        if not table:
+            return None
+        grant = _to_domain_grant(table)
+        if grant.is_active(datetime.now(timezone.utc)):
+            return grant
+        return None
+
 
 
 

@@ -66,6 +66,7 @@ class Memory:
     memory_system: MemorySystem = MemorySystem.SEMANTIC
     occurred_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
+    agent_id: Optional[uuid.UUID] = None
 
     def validate(self) -> None:
         """
@@ -195,6 +196,97 @@ class Agent:
             raise ValueError("Agent name cannot be empty")
         if not self.tenant_id:
             raise ValueError("tenant_id is required")
+
+
+@dataclass
+class AgentCredential:
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    credential_hash: str
+    description: Optional[str]
+    created_at: datetime
+    expires_at: Optional[datetime]
+    revoked_at: Optional[datetime]
+    last_used_at: Optional[datetime]
+
+    def is_active(self, current_time: datetime, agent_status: AgentStatus) -> bool:
+        if self.revoked_at is not None:
+            return False
+        if self.expires_at is not None:
+            expires_at = self.expires_at
+            if expires_at.tzinfo is not None and current_time.tzinfo is None:
+                current_time = current_time.replace(tzinfo=expires_at.tzinfo)
+            elif expires_at.tzinfo is None and current_time.tzinfo is not None:
+                expires_at = expires_at.replace(tzinfo=current_time.tzinfo)
+            if expires_at <= current_time:
+                return False
+        if agent_status != AgentStatus.ACTIVE:
+            return False
+        return True
+
+
+class PrincipalType(str, Enum):
+    USER = "USER"
+    AGENT = "AGENT"
+
+
+@dataclass
+class AgentPrincipal:
+    agent_id: uuid.UUID
+    tenant_id: uuid.UUID
+    principal_type: PrincipalType = PrincipalType.AGENT
+    name: str = ""
+
+
+@dataclass
+class UserPrincipal:
+    user_id: uuid.UUID
+    tenant_id: uuid.UUID
+    principal_type: PrincipalType = PrincipalType.USER
+    email: str = ""
+
+
+@dataclass
+class AccessContext:
+    tenant_id: uuid.UUID
+    principal_type: PrincipalType
+    user_id: Optional[uuid.UUID] = None
+    agent_id: Optional[uuid.UUID] = None
+
+
+class MemoryAccessLevel(str, Enum):
+    READ = "READ"
+    WRITE = "WRITE"
+    MANAGE = "MANAGE"
+
+
+@dataclass
+class MemoryAccessGrant:
+    id: uuid.UUID
+    memory_id: uuid.UUID
+    agent_id: uuid.UUID
+    access_level: MemoryAccessLevel
+    granted_by_principal_type: PrincipalType
+    granted_by_user_id: Optional[uuid.UUID]
+    granted_by_agent_id: Optional[uuid.UUID]
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+
+    def is_active(self, current_time: datetime) -> bool:
+        if self.revoked_at is not None:
+            return False
+        if self.expires_at is not None:
+            expires_at = self.expires_at
+            if expires_at.tzinfo is not None and current_time.tzinfo is None:
+                current_time = current_time.replace(tzinfo=expires_at.tzinfo)
+            elif expires_at.tzinfo is None and current_time.tzinfo is not None:
+                expires_at = expires_at.replace(tzinfo=current_time.tzinfo)
+            if expires_at <= current_time:
+                return False
+        return True
+
+
 
 
 

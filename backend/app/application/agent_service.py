@@ -2,8 +2,11 @@ import logging
 import uuid
 from typing import List, Optional
 
-from app.domain.entities import Agent, AgentStatus
-from app.domain.repositories import IAgentRepository
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
+from app.domain.entities import Agent, AgentStatus, AgentCredential
+from app.domain.repositories import IAgentRepository, IAgentCredentialRepository
 
 logger = logging.getLogger("ame_backend.application.agent_service")
 
@@ -14,8 +17,9 @@ class AgentService:
     Enforces tenant boundaries and valid state machine transitions.
     """
 
-    def __init__(self, agent_repo: IAgentRepository):
+    def __init__(self, agent_repo: IAgentRepository, credential_repo: IAgentCredentialRepository):
         self.agent_repo = agent_repo
+        self.credential_repo = credential_repo
 
     async def create_agent(
         self,
@@ -163,3 +167,100 @@ class AgentService:
 
         logger.info(f"Agent {agent_id} revoked by tenant {tenant_id}")
         return updated
+
+    async def create_credential(
+        self,
+        agent_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        description: Optional[str] = None,
+        expires_in_days: Optional[int] = None,
+    ) -> tuple[AgentCredential, str]:
+        """
+        Creates a new high-entropy credential for the given Agent, enforcing ownership.
+        """
+        agent = await self.get_agent_by_id(agent_id, tenant_id)
+        if agent.status == AgentStatus.REVOKED:
+            raise ValueError("Cannot create credentials for a revoked agent")
+
+        # Generate a high-entropy 256-bit API key (64 hex characters)
+        raw_key = f"ame_agent_{secrets.token_hex(32)}"
+        credential_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+        expires_at = None
+        if expires_in_days is not None:
+            if expires_in_days <= 0:
+                raise ValueError("Expiration days must be positive")
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
+
+        credential = await self.credential_repo.create(
+            agent_id=agent_id,
+            credential_hash=credential_hash,
+            description=description,
+            expires_at=expires_at,
+        )
+        logger.info(f"Created new credential for Agent {agent_id} (Tenant: {tenant_id})")
+        return credential, raw_key
+
+    async def list_credentials(
+        self,
+        agent_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+    ) -> List[AgentCredential]:
+        """
+        Lists metadata for all credentials belonging to the given Agent, enforcing ownership.
+        """
+        # Validate owner and exists
+        await self.get_agent_by_id(agent_id, tenant_id)
+        return await self.credential_repo.list_by_agent(agent_id)
+
+    async def revoke_credential(
+        self,
+        agent_id: uuid.UUID,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+    ) -> AgentCredential:
+        """
+        Revokes an agent's credential by ID, enforcing ownership.
+        """
+        await self.get_agent_by_id(agent_id, tenant_id)
+        
+        credential = await self.credential_repo.get_by_id(credential_id)
+        if not credential or credential.agent_id != agent_id:
+            raise KeyError("Credential not found")
+
+        if credential.revoked_at is not None:
+            return credential  # Already revoked, no-op
+
+        revoked = await self.credential_repo.revoke(credential_id)
+        if not revoked:
+            raise KeyError("Credential not found during revocation")
+        logger.info(f"Credential {credential_id} revoked for Agent {agent_id}")
+        return revoked
+
+    async def authenticate_agent_by_key(self, raw_key: str) -> Agent:
+        """
+        Authenticates an agent using their raw credential API key.
+        Rejects invalid, expired, revoked credentials, or suspended/revoked agents.
+        Updates last_used_at on successful authentication.
+        """
+        if not raw_key or not raw_key.startswith("ame_agent_"):
+            raise ValueError("Invalid credential format")
+
+        credential_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+        credential = await self.credential_repo.get_by_hash(credential_hash)
+        if not credential:
+            raise ValueError("Invalid credentials")
+
+        agent = await self.agent_repo.get_by_id(credential.agent_id)
+        if not agent:
+            raise ValueError("Linked agent not found")
+
+        # Validate credential active status
+        current_time = datetime.now(timezone.utc)
+        if not credential.is_active(current_time, agent.status):
+            raise ValueError("Credentials are inactive or agent is suspended/revoked")
+
+        # Track usage
+        await self.credential_repo.update_last_used(credential.id, current_time)
+        return agent
+

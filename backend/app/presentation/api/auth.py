@@ -7,8 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.infrastructure.db.session import get_db
-from app.infrastructure.repositories.sql_repos import SQLUserRepository, SQLSessionRepository
+from app.infrastructure.repositories.sql_repos import (
+    SQLUserRepository,
+    SQLSessionRepository,
+    SQLAgentRepository,
+    SQLAgentCredentialRepository,
+)
 from app.application.auth_service import AuthService
+from app.application.agent_service import AgentService
+from app.domain.entities import AccessContext, PrincipalType, Agent
 from app.infrastructure.db.models import UserTable
 from app.presentation.api.schemas import (
     UserRegisterRequest,
@@ -49,6 +56,98 @@ async def get_current_user(
         )
 
     return user
+
+
+async def get_access_context(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+) -> AccessContext:
+    """
+    Unified dependency resolving the request principal.
+    Checks headers for agent credentials first, falling back to the user session cookie.
+    """
+    raw_key = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        raw_key = auth_header[7:].strip()
+    else:
+        x_agent_key = request.headers.get("X-Agent-Credential")
+        if x_agent_key:
+            raw_key = x_agent_key.strip()
+
+    # Reject ambiguous requests containing both user and agent credentials
+    has_session = request.cookies.get("session") is not None
+    if raw_key is not None and has_session:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ambiguous authentication context: both agent credential and user session cookie are present"
+        )
+
+    # 1. Process Agent key if present
+    if raw_key:
+        if raw_key.startswith("ame_agent_"):
+            agent_repo = SQLAgentRepository(db)
+            credential_repo = SQLAgentCredentialRepository(db)
+            agent_service = AgentService(agent_repo, credential_repo)
+            try:
+                agent = await agent_service.authenticate_agent_by_key(raw_key)
+                return AccessContext(
+                    tenant_id=agent.tenant_id,
+                    principal_type=PrincipalType.AGENT,
+                    agent_id=agent.id,
+                    user_id=None
+                )
+            except ValueError as e:
+                logger.warning(f"Agent authentication failed: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or inactive agent credentials"
+                )
+
+    # 2. Fallback to session cookie for human users
+    token = request.cookies.get("session")
+    if token:
+        user_repo = SQLUserRepository(db)
+        session_repo = SQLSessionRepository(db)
+        auth_service = AuthService(user_repo, session_repo)
+        user = await auth_service.get_user_from_token(token)
+        if user:
+            return AccessContext(
+                tenant_id=user.id,
+                principal_type=PrincipalType.USER,
+                agent_id=None,
+                user_id=user.id
+            )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated"
+    )
+
+
+async def get_current_agent(
+    context: AccessContext = Depends(get_access_context),
+    db: AsyncSession = Depends(get_db)
+) -> Agent:
+    """
+    FastAPI dependency requiring agent-principal context.
+    Returns HTTP 403 if accessed via human user context.
+    """
+    if context.principal_type != PrincipalType.AGENT or not context.agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Agent principal required"
+        )
+
+    agent_repo = SQLAgentRepository(db)
+    agent = await agent_repo.get_by_id(context.agent_id)
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found"
+        )
+    return agent
+
 
 
 @router.post(

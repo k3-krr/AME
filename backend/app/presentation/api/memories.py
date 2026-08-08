@@ -5,7 +5,7 @@ from fastapi import APIRouter, status, Query, Response, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.db.session import get_db
-from app.presentation.api.auth import get_current_user
+from app.presentation.api.auth import get_current_user, get_access_context
 from app.infrastructure.db.models import UserTable
 from app.infrastructure.repositories.sql_repos import (
     SQLMemoryRepository,
@@ -13,6 +13,8 @@ from app.infrastructure.repositories.sql_repos import (
     SQLMemoryEmbeddingRepository,
     SQLMemoryStateRepository,
     SQLMemoryAccessLogRepository,
+    SQLAgentRepository,
+    SQLMemoryAccessGrantRepository,
 )
 from app.application.memory_service import MemoryService
 from app.application.retrieval_service import RetrievalService
@@ -20,7 +22,7 @@ from app.application.ranking_service import RankingService
 from app.application.analytics_service import AnalyticsService
 from app.config import settings
 from app.infrastructure.clients.embedding_client import OpenAIEmbeddingProvider
-from app.domain.entities import MemoryType, MemoryStatus
+from app.domain.entities import MemoryType, MemoryStatus, AccessContext, MemoryAccessLevel, MemoryAccessGrant
 from app.presentation.api.schemas import (
     MemoryCreateRequest,
     MemoryUpdateRequest,
@@ -32,6 +34,9 @@ from app.presentation.api.schemas import (
     MemoryAnalyticsResponse,
     MemoryAccessLogResponse,
     DecayTriggerResponse,
+    MemoryAccessGrantCreateRequest,
+    MemoryAccessGrantResponse,
+    MemoryAccessGrantRevokeResponse,
 )
 
 logger = logging.getLogger("ame_backend.api.memories")
@@ -80,6 +85,8 @@ def get_memory_service(
     conversation_repo = SQLConversationRepository(db)
     embedding_repo = SQLMemoryEmbeddingRepository(db)
     memory_state_repo = SQLMemoryStateRepository(db)
+    agent_repo = SQLAgentRepository(db)
+    grant_repo = SQLMemoryAccessGrantRepository(db)
 
     from app.domain.memory_router import MemoryRouter
     from app.infrastructure.repositories.sql_repos import SQLRepositoryFactory
@@ -118,6 +125,8 @@ def get_memory_service(
         repository_factory=repository_factory,
         hybrid_retrieval_service=hybrid_retrieval_service,
         hybrid_ranking_service=hybrid_ranking_service,
+        agent_repo=agent_repo,
+        grant_repo=grant_repo,
     )
 
 
@@ -157,7 +166,7 @@ def get_retrieval_service(
 )
 async def create_memory(
     payload: MemoryCreateRequest,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     memory_service: MemoryService = Depends(get_memory_service),
 ):
     """
@@ -165,7 +174,7 @@ async def create_memory(
     """
     try:
         memory = await memory_service.create_memory(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             conversation_id=payload.conversation_id,
             content=payload.content,
             memory_type=payload.memory_type,
@@ -175,6 +184,7 @@ async def create_memory(
             memory_system=payload.memory_system,
             occurred_at=payload.occurred_at,
             expires_at=payload.expires_at,
+            agent_id=access_context.agent_id,
         )
         return memory
     except ValueError as e:
@@ -335,14 +345,19 @@ async def reindex_memories(
 )
 async def get_memory(
     memory_id: uuid.UUID,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     memory_service: MemoryService = Depends(get_memory_service),
 ):
     """
     Retrieves details of a specific memory record.
     """
     try:
-        memory = await memory_service.get_memory(user_id=current_user.id, memory_id=memory_id)
+        memory = await memory_service.get_memory(
+            user_id=access_context.tenant_id,
+            memory_id=memory_id,
+            access_context=access_context,
+            required_level=MemoryAccessLevel.READ
+        )
         return memory
     except KeyError as e:
         raise HTTPException(
@@ -379,7 +394,7 @@ async def get_memory(
 async def update_memory(
     memory_id: uuid.UUID,
     payload: MemoryUpdateRequest,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     memory_service: MemoryService = Depends(get_memory_service),
 ):
     """
@@ -387,7 +402,7 @@ async def update_memory(
     """
     try:
         memory = await memory_service.update_memory(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             memory_id=memory_id,
             content=payload.content,
             memory_type=payload.memory_type,
@@ -398,6 +413,7 @@ async def update_memory(
             memory_system=payload.memory_system,
             occurred_at=payload.occurred_at,
             expires_at=payload.expires_at,
+            access_context=access_context,
         )
         return memory
     except ValueError as e:
@@ -442,14 +458,14 @@ async def update_memory(
 )
 async def delete_memory(
     memory_id: uuid.UUID,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     memory_service: MemoryService = Depends(get_memory_service),
 ):
     """
     Soft-deletes an existing memory by setting its status state to DELETED.
     """
     try:
-        await memory_service.delete_memory(user_id=current_user.id, memory_id=memory_id)
+        await memory_service.delete_memory(user_id=access_context.tenant_id, memory_id=memory_id, access_context=access_context)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except KeyError as e:
         raise HTTPException(
@@ -572,7 +588,7 @@ async def trigger_decay(
 )
 async def manual_reinforce_memory(
     memory_id: uuid.UUID,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     memory_service: MemoryService = Depends(get_memory_service),
 ):
     """
@@ -580,7 +596,12 @@ async def manual_reinforce_memory(
     """
     try:
         # Check memory ownership first
-        await memory_service.get_memory(user_id=current_user.id, memory_id=memory_id)
+        await memory_service.get_memory(
+            user_id=access_context.tenant_id,
+            memory_id=memory_id,
+            access_context=access_context,
+            required_level=MemoryAccessLevel.READ
+        )
         await memory_service.reinforce_memories([memory_id])
         return {"message": "Memory reinforced successfully"}
     except KeyError as e:
@@ -615,7 +636,7 @@ async def manual_reinforce_memory(
 )
 async def get_memory_analytics(
     memory_id: uuid.UUID,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     memory_service: MemoryService = Depends(get_memory_service),
     db: AsyncSession = Depends(get_db),
 ):
@@ -624,7 +645,12 @@ async def get_memory_analytics(
     """
     try:
         # Check memory ownership
-        await memory_service.get_memory(user_id=current_user.id, memory_id=memory_id)
+        await memory_service.get_memory(
+            user_id=access_context.tenant_id,
+            memory_id=memory_id,
+            access_context=access_context,
+            required_level=MemoryAccessLevel.READ
+        )
         
         # Query memory state and access logs
         state_repo = SQLMemoryStateRepository(db)
@@ -707,6 +733,164 @@ async def search_hybrid_memories(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Hybrid search operation failed."
         )
+
+
+@router.post(
+    "/memories/{memory_id}/grants",
+    response_model=MemoryAccessGrantResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        201: {"description": "Memory access grant successfully created/updated"},
+        400: {"model": StandardErrorResponse, "description": "Bad Request"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden"},
+        404: {"model": StandardErrorResponse, "description": "Memory or target agent not found"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def grant_memory_access(
+    memory_id: uuid.UUID,
+    payload: MemoryAccessGrantCreateRequest,
+    access_context: AccessContext = Depends(get_access_context),
+    memory_service: MemoryService = Depends(get_memory_service),
+):
+    """
+    Grants or updates access to a specific memory for a target agent.
+    """
+    try:
+        expires_at = None
+        if payload.expires_in_days is not None:
+            from datetime import datetime, timezone, timedelta
+            expires_at = datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)
+
+        if not memory_service.auth_service:
+            raise HTTPException(status_code=500, detail="Authorization service not configured")
+
+        grant = await memory_service.auth_service.grant_access(
+            access_context=access_context,
+            memory_id=memory_id,
+            target_agent_id=payload.agent_id,
+            level=payload.access_level,
+            expires_at=expires_at,
+        )
+        return grant
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error granting memory access: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to grant memory access."
+        )
+
+
+@router.get(
+    "/memories/{memory_id}/grants",
+    response_model=List[MemoryAccessGrantResponse],
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Retrieved list of active grants for the memory"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden"},
+        404: {"model": StandardErrorResponse, "description": "Memory not found"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def list_memory_grants(
+    memory_id: uuid.UUID,
+    access_context: AccessContext = Depends(get_access_context),
+    memory_service: MemoryService = Depends(get_memory_service),
+):
+    """
+    Lists all active, unexpired access grants for a memory.
+    """
+    try:
+        if not memory_service.auth_service:
+            raise HTTPException(status_code=500, detail="Authorization service not configured")
+
+        grants = await memory_service.auth_service.list_active_grants(
+            access_context=access_context,
+            memory_id=memory_id
+        )
+        return grants
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error listing memory grants: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve memory grants."
+        )
+
+
+@router.post(
+    "/memories/{memory_id}/grants/{agent_id}/revoke",
+    response_model=MemoryAccessGrantRevokeResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Memory access grant successfully revoked"},
+        401: {"model": StandardErrorResponse, "description": "Unauthorized"},
+        403: {"model": StandardErrorResponse, "description": "Forbidden"},
+        404: {"model": StandardErrorResponse, "description": "Memory or grant not found"},
+        500: {"model": StandardErrorResponse, "description": "Internal server error"},
+    }
+)
+async def revoke_memory_access(
+    memory_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    access_context: AccessContext = Depends(get_access_context),
+    memory_service: MemoryService = Depends(get_memory_service),
+):
+    """
+    Revokes access to a memory for a target agent.
+    """
+    try:
+        if not memory_service.auth_service:
+            raise HTTPException(status_code=500, detail="Authorization service not configured")
+
+        grant = await memory_service.auth_service.revoke_access(
+            access_context=access_context,
+            memory_id=memory_id,
+            target_agent_id=agent_id
+        )
+        return MemoryAccessGrantRevokeResponse(
+            memory_id=grant.memory_id,
+            agent_id=grant.agent_id,
+            revoked_at=grant.revoked_at
+        )
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error revoking memory access: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to revoke memory access."
+        )
+
 
 
 

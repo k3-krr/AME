@@ -233,17 +233,17 @@ async def test_authorization_boundaries(client: AsyncClient):
     )
     assert login_b.status_code == 200
 
-    # 4. User B tries to read User A's memory -> 403 Forbidden
+    # 4. User B tries to read User A's memory -> 404 Not Found (prevents discovery)
     r_get = await client.get(f"/api/v1/memories/{mem_a_id}")
-    assert r_get.status_code == 403
+    assert r_get.status_code == 404
 
-    # 5. User B tries to update User A's memory -> 403 Forbidden
+    # 5. User B tries to update User A's memory -> 404 Not Found
     r_put = await client.put(f"/api/v1/memories/{mem_a_id}", json={"content": "hack"})
-    assert r_put.status_code == 403
+    assert r_put.status_code == 404
 
-    # 6. User B tries to delete User A's memory -> 403 Forbidden
+    # 6. User B tries to delete User A's memory -> 404 Not Found
     r_del = await client.delete(f"/api/v1/memories/{mem_a_id}")
-    assert r_del.status_code == 403
+    assert r_del.status_code == 404
 
     # 7. User B tries to add a memory linked to User A's conversation -> 403 Forbidden
     r_add = await client.post(

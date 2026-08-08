@@ -17,6 +17,9 @@ from app.domain.entities import (
     ExtractionAction,
     Agent,
     AgentStatus,
+    AgentCredential,
+    MemoryAccessGrant,
+    MemoryAccessLevel,
 )
 from app.domain.memory_system import MemorySystem
 from app.domain.embedding import MemoryEmbedding
@@ -154,6 +157,7 @@ class IMemoryRepository(abc.ABC):
         memory_system: MemorySystem = MemorySystem.SEMANTIC,
         occurred_at: Optional[datetime] = None,
         expires_at: Optional[datetime] = None,
+        agent_id: Optional[uuid.UUID] = None,
     ) -> Memory:
         raise NotImplementedError()
 
@@ -519,6 +523,62 @@ class IAgentRepository(abc.ABC):
     @abc.abstractmethod
     async def list_by_tenant(self, tenant_id: uuid.UUID) -> List[Agent]:
         raise NotImplementedError()
+
+
+class IAgentCredentialRepository(abc.ABC):
+    """Repository interface for Agent Credentials."""
+
+    @abc.abstractmethod
+    async def get_by_id(self, credential_id: uuid.UUID) -> Optional[AgentCredential]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_by_hash(self, credential_hash: str) -> Optional[AgentCredential]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def create(
+        self,
+        agent_id: uuid.UUID,
+        credential_hash: str,
+        description: Optional[str],
+        expires_at: Optional[datetime],
+    ) -> AgentCredential:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def revoke(self, credential_id: uuid.UUID) -> Optional[AgentCredential]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_by_agent(self, agent_id: uuid.UUID) -> List[AgentCredential]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def update_last_used(self, credential_id: uuid.UUID, last_used_at: datetime) -> None:
+        raise NotImplementedError()
+
+
+class IMemoryAccessGrantRepository(abc.ABC):
+    """Domain repository contract for memory access grants."""
+
+    @abc.abstractmethod
+    async def get_by_memory_and_agent(self, memory_id: uuid.UUID, agent_id: uuid.UUID) -> Optional[MemoryAccessGrant]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def save(self, grant: MemoryAccessGrant) -> MemoryAccessGrant:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def list_active_by_memory(self, memory_id: uuid.UUID) -> List[MemoryAccessGrant]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    async def get_active_grant(self, memory_id: uuid.UUID, agent_id: uuid.UUID) -> Optional[MemoryAccessGrant]:
+        raise NotImplementedError()
+
+
 
 
 

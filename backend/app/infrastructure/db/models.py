@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import String, Text, DateTime, ForeignKey, func, CheckConstraint, Integer, JSON
+from typing import Optional, List
+from sqlalchemy import String, Text, DateTime, ForeignKey, func, CheckConstraint, Integer, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
 
@@ -119,6 +119,11 @@ class MemoryTable(Base):
     )
     occurred_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL"), 
+        index=True, 
+        nullable=True
+    )
 
     # ORM Relationships
     user: Mapped["UserTable"] = relationship()
@@ -129,6 +134,8 @@ class MemoryTable(Base):
     state_relation: Mapped[Optional["MemoryStateTable"]] = relationship(
         back_populates="memory", cascade="all, delete-orphan", uselist=False
     )
+    agent: Mapped[Optional["AgentTable"]] = relationship()
+
 
 
 class MemoryEmbeddingTable(Base):
@@ -266,6 +273,64 @@ class AgentTable(Base):
 
     # ORM Relationship
     tenant: Mapped["UserTable"] = relationship()
+    credentials: Mapped[List["AgentCredentialTable"]] = relationship(
+        back_populates="agent", cascade="all, delete-orphan"
+    )
+
+
+class AgentCredentialTable(Base):
+    __tablename__ = "agent_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False
+    )
+    credential_hash: Mapped[str] = mapped_column(
+        String(64),
+        unique=True,
+        index=True,
+        nullable=False
+    )
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # ORM Relationship
+    agent: Mapped["AgentTable"] = relationship(back_populates="credentials")
+
+
+class MemoryAccessGrantTable(Base):
+    __tablename__ = "memory_access_grants"
+    __table_args__ = (
+        UniqueConstraint("memory_id", "agent_id", name="uq_memory_access_grants_mem_agent"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memories.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    agent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    access_level: Mapped[str] = mapped_column(String(20), nullable=False)
+    granted_by_principal_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    granted_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    granted_by_agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # ORM Relationships
+    memory: Mapped["MemoryTable"] = relationship(foreign_keys=[memory_id])
+    agent: Mapped["AgentTable"] = relationship(foreign_keys=[agent_id])
 
 
 # Register Knowledge Graph Bounded Context models

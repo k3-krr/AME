@@ -3,7 +3,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Union
 
-from app.domain.entities import Memory, MemoryStatus, MemoryType, normalize_memory_content
+from app.domain.entities import (
+    Memory,
+    MemoryStatus,
+    MemoryType,
+    normalize_memory_content,
+    AccessContext,
+    MemoryAccessLevel,
+)
 from app.domain.memory_system import (
     MemorySystem,
     validate_memory_system_constraints,
@@ -37,6 +44,9 @@ class MemoryService:
         repository_factory: Optional[IRepositoryFactory] = None,
         hybrid_retrieval_service: Optional[Union[HybridRetrievalService, GraphAwareHybridRetrievalService]] = None,
         hybrid_ranking_service: Optional[HybridRankingService] = None,
+        agent_repo: Optional[any] = None,
+        grant_repo: Optional[any] = None,
+        auth_service: Optional[any] = None,
     ):
         self.memory_repo = memory_repo
         self.conversation_repo = conversation_repo
@@ -47,6 +57,13 @@ class MemoryService:
         self.repository_factory = repository_factory
         self.hybrid_retrieval_service = hybrid_retrieval_service
         self.hybrid_ranking_service = hybrid_ranking_service
+        self.agent_repo = agent_repo
+        self.grant_repo = grant_repo
+        if not auth_service and agent_repo and grant_repo:
+            from app.application.memory_auth_service import MemoryAuthorizationService
+            self.auth_service = MemoryAuthorizationService(memory_repo, agent_repo, grant_repo)
+        else:
+            self.auth_service = auth_service
 
     async def reinforce_memories(self, memory_ids: List[uuid.UUID]) -> None:
         """
@@ -75,6 +92,7 @@ class MemoryService:
         memory_system: Optional[MemorySystem] = None,
         occurred_at: Optional[datetime] = None,
         expires_at: Optional[datetime] = None,
+        agent_id: Optional[uuid.UUID] = None,
     ) -> Memory:
         """
         Creates and persists a new memory after validating inputs and checking for duplicates.
@@ -106,6 +124,7 @@ class MemoryService:
             occurred_at=occurred_at,
             expires_at=expires_at,
             metadata=metadata or {},
+            agent_id=agent_id,
         )
 
         # Classify memory tier using MemoryRouter
@@ -153,6 +172,7 @@ class MemoryService:
             memory_system=resolved_system,
             occurred_at=occurred_at,
             expires_at=resolved_expires_at,
+            agent_id=agent_id,
         )
         
         # 5. Generate and save embedding in the Embedding bounded context
@@ -172,15 +192,28 @@ class MemoryService:
         logger.info(f"Memory successfully created: {memory.id} for user: {user_id} in system: {resolved_system.value}")
         return memory
 
-    async def get_memory(self, user_id: uuid.UUID, memory_id: uuid.UUID) -> Memory:
+    async def get_memory(
+        self,
+        user_id: uuid.UUID,
+        memory_id: uuid.UUID,
+        access_context: Optional[AccessContext] = None,
+        required_level: MemoryAccessLevel = MemoryAccessLevel.READ,
+    ) -> Memory:
         """
-        Retrieves a single memory and validates user ownership.
+        Retrieves a single memory and validates ownership/access rules.
         """
         memory = await self.memory_repo.get_by_id(memory_id)
         if not memory:
             raise KeyError("Memory not found")
-        if memory.user_id != user_id:
-            raise PermissionError("User does not own this memory")
+        
+        if access_context:
+            if self.auth_service:
+                await self.auth_service.enforce_access(access_context, memory, required_level)
+            elif memory.user_id != access_context.tenant_id:
+                raise KeyError("Memory not found")
+        else:
+            if memory.user_id != user_id:
+                raise PermissionError("User does not own this memory")
         return memory
 
     async def update_memory(
@@ -196,12 +229,13 @@ class MemoryService:
         memory_system: Optional[MemorySystem] = None,
         occurred_at: Optional[datetime] = None,
         expires_at: Optional[datetime] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> Memory:
         """
         Updates an existing memory after verifying ownership and validating the changes.
         """
         # Fetch current record and check ownership
-        memory = await self.get_memory(user_id, memory_id)
+        memory = await self.get_memory(user_id, memory_id, access_context=access_context, required_level=MemoryAccessLevel.WRITE)
 
         # Build proposed updates and validate bounds
         new_importance = importance if importance is not None else memory.importance
@@ -286,12 +320,12 @@ class MemoryService:
         logger.info(f"Memory successfully updated: {memory_id} (Version: {updated_memory.version})")
         return updated_memory
 
-    async def delete_memory(self, user_id: uuid.UUID, memory_id: uuid.UUID) -> Memory:
+    async def delete_memory(self, user_id: uuid.UUID, memory_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> Memory:
         """
         Soft-deletes a memory by updating its status to DELETED.
         """
-        # Fetch current record and verify ownership
-        await self.get_memory(user_id, memory_id)
+        # Fetch current record and verify ownership with MANAGE level
+        await self.get_memory(user_id, memory_id, access_context=access_context, required_level=MemoryAccessLevel.MANAGE)
 
         # Apply soft delete
         now = datetime.now(timezone.utc)

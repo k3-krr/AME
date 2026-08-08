@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, EmailStr, Field
 
-from app.domain.entities import MemoryType, MemoryStatus, AgentStatus
+from app.domain.entities import MemoryType, MemoryStatus, AgentStatus, MemoryAccessLevel, PrincipalType
 from app.domain.memory_system import MemorySystem
 
 
@@ -259,6 +259,72 @@ class AgentResponse(BaseModel):
     class Config:
         from_attributes = True
         populate_by_name = True
+
+
+class AgentCredentialCreateRequest(BaseModel):
+    """Schema representing a request to issue a new agent credential."""
+    description: Optional[str] = Field(None, max_length=255, description="A description to identify this credential")
+    expires_in_days: Optional[int] = Field(None, gt=0, description="Expiration time in days (must be positive)")
+
+
+class AgentCredentialResponse(BaseModel):
+    """Schema representing an agent credential detail response (includes raw_key when newly created)."""
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    description: Optional[str]
+    raw_key: Optional[str] = None
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class AgentCredentialRevokeResponse(BaseModel):
+    """Schema representing a response to a credential revocation request."""
+    id: uuid.UUID
+    revoked_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MemoryAccessGrantCreateRequest(BaseModel):
+    agent_id: uuid.UUID
+    access_level: MemoryAccessLevel
+    expires_in_days: Optional[int] = Field(None, gt=0)
+
+
+class MemoryAccessGrantResponse(BaseModel):
+    id: uuid.UUID
+    memory_id: uuid.UUID
+    agent_id: uuid.UUID
+    access_level: MemoryAccessLevel
+    granted_by_principal_type: PrincipalType
+    granted_by_user_id: Optional[uuid.UUID]
+    granted_by_agent_id: Optional[uuid.UUID]
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
+class MemoryAccessGrantRevokeResponse(BaseModel):
+    memory_id: uuid.UUID
+    agent_id: uuid.UUID
+    revoked_at: datetime
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+
 
 
 
