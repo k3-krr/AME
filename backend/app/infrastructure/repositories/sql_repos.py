@@ -57,8 +57,37 @@ from app.domain.entities import (
     AccessContext,
     MemoryAccessLevel,
     MemoryAccessGrant,
+    MemoryAuthorizationFilterSpec,
 )
 from app.domain.memory_system import MemorySystem
+
+
+def apply_memory_auth_filter(query, spec: MemoryAuthorizationFilterSpec):
+    """
+    Compiles the MemoryAuthorizationFilterSpec domain rules into database-level SQL clauses.
+    Ensures optimal execution plans on both pgvector and SQLite.
+    """
+    if not spec.is_agent:
+        return query.where(MemoryTable.user_id == spec.tenant_id)
+    else:
+        from sqlalchemy.sql import exists
+        from app.infrastructure.db.models import MemoryAccessGrantTable
+        
+        grant_exists = exists().where(
+            MemoryAccessGrantTable.memory_id == MemoryTable.id,
+            MemoryAccessGrantTable.agent_id == spec.agent_id,
+            MemoryAccessGrantTable.revoked_at.is_(None),
+            (MemoryAccessGrantTable.expires_at.is_(None) | (MemoryAccessGrantTable.expires_at > spec.current_time)),
+            MemoryAccessGrantTable.access_level.in_(["READ", "WRITE", "MANAGE"])
+        )
+        return query.where(
+            MemoryTable.user_id == spec.tenant_id,
+            MemoryTable.status != MemoryStatus.DELETED.value,
+            (
+                (MemoryTable.agent_id == spec.agent_id) |
+                grant_exists
+            )
+        )
 
 
 
@@ -241,20 +270,30 @@ class SQLMemoryRepository(IMemoryRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_by_id(self, memory_id: uuid.UUID) -> Optional[Memory]:
-        result = await self.session.execute(
-            select(MemoryTable).where(MemoryTable.id == memory_id)
-        )
+    async def get_by_id(self, memory_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> Optional[Memory]:
+        query = select(MemoryTable).where(MemoryTable.id == memory_id)
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        result = await self.session.execute(query)
         table = result.scalars().first()
         return _to_domain(table) if table else None
 
-    async def get_by_ids(self, memory_ids: List[uuid.UUID]) -> List[Memory]:
+    async def get_by_ids(self, memory_ids: List[uuid.UUID], access_context: Optional[AccessContext] = None) -> List[Memory]:
         if not memory_ids:
             return []
-        result = await self.session.execute(
-            select(MemoryTable).where(MemoryTable.id.in_(memory_ids))
-        )
-        return [_to_domain(t) for t in result.scalars().all()]
+        query = select(MemoryTable).where(MemoryTable.id.in_(memory_ids))
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        result = await self.session.execute(query)
+        # Preserve input order
+        table_map = {t.id: t for t in result.scalars().all()}
+        ordered_memories = []
+        for mid in memory_ids:
+            if mid in table_map:
+                ordered_memories.append(_to_domain(table_map[mid]))
+        return ordered_memories
 
 
     async def create(
@@ -375,8 +414,15 @@ class SQLMemoryRepository(IMemoryRepository):
         limit: int = 20,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
-        query = select(MemoryTable).where(MemoryTable.user_id == user_id)
+        query = select(MemoryTable)
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        else:
+            query = query.where(MemoryTable.user_id == user_id)
+
         if memory_type:
             query = query.where(MemoryTable.memory_type == memory_type.value)
         if status:
@@ -408,8 +454,13 @@ class SQLMemoryRepository(IMemoryRepository):
         limit: int = 20,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         query = select(MemoryTable).where(MemoryTable.conversation_id == conversation_id)
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+
         if memory_type:
             query = query.where(MemoryTable.memory_type == memory_type.value)
         if status:
@@ -448,39 +499,29 @@ class SQLMemoryRepository(IMemoryRepository):
                 return _to_domain(record)
         return None
 
-    async def get_by_ids(self, memory_ids: List[uuid.UUID]) -> List[Memory]:
-        if not memory_ids:
-            return []
-        result = await self.session.execute(
-            select(MemoryTable).where(MemoryTable.id.in_(memory_ids))
-        )
-        tables = result.scalars().all()
-        table_map = {t.id: t for t in tables}
-        
-        ordered_memories = []
-        for mid in memory_ids:
-            if mid in table_map:
-                ordered_memories.append(_to_domain(table_map[mid]))
-        return ordered_memories
-
 
 class SQLSemanticMemoryRepository(SQLMemoryRepository, ISemanticMemoryRepository):
     """SQLAlchemy concrete implementation for Semantic memory system."""
 
-    async def list_semantic_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> List[Memory]:
+    async def list_semantic_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20, access_context: Optional[AccessContext] = None) -> List[Memory]:
         return await self.list_by_user(
             user_id=user_id,
             memory_system=MemorySystem.SEMANTIC,
             page=page,
             limit=limit,
+            access_context=access_context,
         )
 
-    async def get_semantic_memories_by_type(self, user_id: uuid.UUID, memory_types: List[MemoryType]) -> List[Memory]:
+    async def get_semantic_memories_by_type(self, user_id: uuid.UUID, memory_types: List[MemoryType], access_context: Optional[AccessContext] = None) -> List[Memory]:
         query = select(MemoryTable).where(
-            MemoryTable.user_id == user_id,
             MemoryTable.memory_system == MemorySystem.SEMANTIC.value,
             MemoryTable.memory_type.in_([t.value for t in memory_types]),
         )
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        else:
+            query = query.where(MemoryTable.user_id == user_id)
         result = await self.session.execute(query)
         return [_to_domain(r) for r in result.scalars().all()]
 
@@ -489,6 +530,7 @@ class SQLSemanticMemoryRepository(SQLMemoryRepository, ISemanticMemoryRepository
         user_id: uuid.UUID,
         query_embedding: Optional[list[float]] = None,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         if query_embedding:
             if self.session.bind.dialect.name == "sqlite":
@@ -496,11 +538,15 @@ class SQLSemanticMemoryRepository(SQLMemoryRepository, ISemanticMemoryRepository
                     select(MemoryEmbeddingTable)
                     .join(MemoryTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
                     .where(
-                        MemoryTable.user_id == user_id,
                         MemoryTable.memory_system == MemorySystem.SEMANTIC.value,
                         MemoryTable.status == MemoryStatus.ACTIVE.value
                     )
                 )
+                if access_context:
+                    spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+                    query = apply_memory_auth_filter(query, spec)
+                else:
+                    query = query.where(MemoryTable.user_id == user_id)
                 result = await self.session.execute(query)
                 tables = result.scalars().all()
                 matches = []
@@ -511,24 +557,27 @@ class SQLSemanticMemoryRepository(SQLMemoryRepository, ISemanticMemoryRepository
                 top_ids = [m[0] for m in matches[:limit]]
                 if not top_ids:
                     return []
-                return await self.get_by_ids(top_ids)
+                return await self.get_by_ids(top_ids, access_context=access_context)
             else:
                 distance_expr = MemoryEmbeddingTable.embedding.cosine_distance(query_embedding)
                 query = (
                     select(MemoryTable)
                     .join(MemoryEmbeddingTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
                     .where(
-                        MemoryTable.user_id == user_id,
                         MemoryTable.memory_system == MemorySystem.SEMANTIC.value,
                         MemoryTable.status == MemoryStatus.ACTIVE.value
                     )
-                    .order_by(distance_expr)
-                    .limit(limit)
                 )
+                if access_context:
+                    spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+                    query = apply_memory_auth_filter(query, spec)
+                else:
+                    query = query.where(MemoryTable.user_id == user_id)
+                query = query.order_by(distance_expr).limit(limit)
                 result = await self.session.execute(query)
                 return [_to_domain(r) for r in result.scalars().all()]
         else:
-            return await self.list_semantic_memories(user_id=user_id, limit=limit)
+            return await self.list_semantic_memories(user_id=user_id, limit=limit, access_context=access_context)
 
 
 class SQLEpisodicMemoryRepository(SQLMemoryRepository, IEpisodicMemoryRepository):
@@ -541,11 +590,17 @@ class SQLEpisodicMemoryRepository(SQLMemoryRepository, IEpisodicMemoryRepository
         end_time: Optional[datetime] = None,
         page: int = 1,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         query = select(MemoryTable).where(
-            MemoryTable.user_id == user_id,
             MemoryTable.memory_system == MemorySystem.EPISODIC.value,
         )
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        else:
+            query = query.where(MemoryTable.user_id == user_id)
+
         if start_time:
             query = query.where(MemoryTable.occurred_at >= start_time)
         if end_time:
@@ -565,6 +620,7 @@ class SQLEpisodicMemoryRepository(SQLMemoryRepository, IEpisodicMemoryRepository
         conversation_id: uuid.UUID,
         page: int = 1,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         return await self.list_by_conversation(
             conversation_id=conversation_id,
@@ -573,6 +629,7 @@ class SQLEpisodicMemoryRepository(SQLMemoryRepository, IEpisodicMemoryRepository
             limit=limit,
             sort_by="occurred_at",
             sort_order="asc",
+            access_context=access_context,
         )
 
     async def retrieve_episodic(
@@ -580,38 +637,45 @@ class SQLEpisodicMemoryRepository(SQLMemoryRepository, IEpisodicMemoryRepository
         user_id: uuid.UUID,
         conversation_id: Optional[uuid.UUID] = None,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         if conversation_id:
-            return await self.list_by_conversation_episodic(conversation_id=conversation_id, limit=limit)
-        return await self.get_timeline(user_id=user_id, limit=limit)
+            return await self.list_by_conversation_episodic(conversation_id=conversation_id, limit=limit, access_context=access_context)
+        return await self.get_timeline(user_id=user_id, limit=limit, access_context=access_context)
 
 
 class SQLProceduralMemoryRepository(SQLMemoryRepository, IProceduralMemoryRepository):
     """SQLAlchemy concrete implementation for Procedural memory system."""
 
-    async def get_procedural_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> List[Memory]:
+    async def get_procedural_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20, access_context: Optional[AccessContext] = None) -> List[Memory]:
         return await self.list_by_user(
             user_id=user_id,
             memory_system=MemorySystem.PROCEDURAL,
             page=page,
             limit=limit,
+            access_context=access_context,
         )
 
     async def get_frequent_procedures(
         self,
         user_id: uuid.UUID,
         limit: int = 10,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         query = (
             select(MemoryTable)
             .join(MemoryStateTable, MemoryTable.id == MemoryStateTable.memory_id)
             .where(
-                MemoryTable.user_id == user_id,
                 MemoryTable.memory_system == MemorySystem.PROCEDURAL.value,
             )
-            .order_by(desc(MemoryStateTable.access_count))
-            .limit(limit)
         )
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        else:
+            query = query.where(MemoryTable.user_id == user_id)
+
+        query = query.order_by(desc(MemoryStateTable.access_count)).limit(limit)
         result = await self.session.execute(query)
         return [_to_domain(r) for r in result.scalars().all()]
 
@@ -619,25 +683,30 @@ class SQLProceduralMemoryRepository(SQLMemoryRepository, IProceduralMemoryReposi
         self,
         user_id: uuid.UUID,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
-        return await self.get_frequent_procedures(user_id=user_id, limit=limit)
+        return await self.get_frequent_procedures(user_id=user_id, limit=limit, access_context=access_context)
 
 
 class SQLWorkingMemoryRepository(SQLMemoryRepository, IWorkingMemoryRepository):
     """SQLAlchemy concrete implementation for Working memory system."""
 
-    async def get_active_working_memories(self, user_id: uuid.UUID) -> List[Memory]:
+    async def get_active_working_memories(self, user_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> List[Memory]:
         now = datetime.now(timezone.utc)
         query = select(MemoryTable).where(
-            MemoryTable.user_id == user_id,
             MemoryTable.memory_system == MemorySystem.WORKING.value,
             MemoryTable.status == MemoryStatus.ACTIVE.value,
             (MemoryTable.expires_at == None) | (MemoryTable.expires_at > now),
         )
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        else:
+            query = query.where(MemoryTable.user_id == user_id)
         result = await self.session.execute(query)
         return [_to_domain(r) for r in result.scalars().all()]
 
-    async def list_active_session_context(self, conversation_id: uuid.UUID) -> List[Memory]:
+    async def list_active_session_context(self, conversation_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> List[Memory]:
         now = datetime.now(timezone.utc)
         query = select(MemoryTable).where(
             MemoryTable.conversation_id == conversation_id,
@@ -645,6 +714,9 @@ class SQLWorkingMemoryRepository(SQLMemoryRepository, IWorkingMemoryRepository):
             MemoryTable.status == MemoryStatus.ACTIVE.value,
             (MemoryTable.expires_at == None) | (MemoryTable.expires_at > now),
         )
+        if access_context:
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
         result = await self.session.execute(query)
         return [_to_domain(r) for r in result.scalars().all()]
 
@@ -652,10 +724,11 @@ class SQLWorkingMemoryRepository(SQLMemoryRepository, IWorkingMemoryRepository):
         self,
         user_id: uuid.UUID,
         conversation_id: Optional[uuid.UUID] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         if conversation_id:
-            return await self.list_active_session_context(conversation_id=conversation_id)
-        return await self.get_active_working_memories(user_id=user_id)
+            return await self.list_active_session_context(conversation_id=conversation_id, access_context=access_context)
+        return await self.get_active_working_memories(user_id=user_id, access_context=access_context)
 
 
 class SQLRepositoryFactory(IRepositoryFactory):

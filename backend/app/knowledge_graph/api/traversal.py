@@ -6,7 +6,8 @@ from fastapi import APIRouter, status, Query, Depends, HTTPException
 
 from app.config import settings
 
-from app.presentation.api.auth import get_current_user
+from app.presentation.api.auth import get_current_user, get_access_context
+from app.domain.entities import AccessContext
 from app.infrastructure.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.infrastructure.db.models import UserTable
@@ -68,7 +69,7 @@ async def get_neighbors(
     node_types: Optional[str] = Query(None, description="Comma-separated node types"),
     entity_types: Optional[str] = Query(None, description="Comma-separated entity types"),
     confidence_threshold: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum edge confidence"),
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     traversal_service: GraphTraversalService = Depends(get_graph_traversal_service),
 ):
     """
@@ -86,13 +87,14 @@ async def get_neighbors(
             )
 
         neighbors = await traversal_service.get_neighbors(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             node_id=node_id,
             direction=direction,
             relationship_types=rel_types,
             node_types=n_types,
             entity_types=e_types,
             confidence_threshold=confidence_threshold,
+            access_context=access_context,
         )
 
         response = []
@@ -136,7 +138,7 @@ async def get_connected_memories(
     node_types: Optional[str] = Query(None, description="Comma-separated node types"),
     entity_types: Optional[str] = Query(None, description="Comma-separated entity types"),
     confidence_threshold: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum edge confidence"),
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     traversal_service: GraphTraversalService = Depends(get_graph_traversal_service),
     db: AsyncSession = Depends(get_db),
 ):
@@ -158,7 +160,7 @@ async def get_connected_memories(
         memory_repo = SQLMemoryRepository(db)
 
         memories = await traversal_service.get_connected_memories(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             node_id=node_id,
             max_depth=max_depth,
             direction=direction,
@@ -167,6 +169,7 @@ async def get_connected_memories(
             entity_types=e_types,
             confidence_threshold=confidence_threshold,
             memory_repo=memory_repo,
+            access_context=access_context,
         )
 
         return [MemoryResponse.from_orm(m) for m in memories]
@@ -200,7 +203,7 @@ async def find_shortest_path(
     node_types: Optional[str] = Query(None, description="Comma-separated node types"),
     entity_types: Optional[str] = Query(None, description="Comma-separated entity types"),
     confidence_threshold: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum edge confidence"),
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     traversal_service: GraphTraversalService = Depends(get_graph_traversal_service),
 ):
     """
@@ -212,7 +215,7 @@ async def find_shortest_path(
         e_types = parse_enum_list(entity_types, EntityType)
 
         path_result = await traversal_service.find_shortest_path(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             source_node_id=source_node_id,
             target_node_id=target_node_id,
             direction=direction,
@@ -220,6 +223,7 @@ async def find_shortest_path(
             node_types=n_types,
             entity_types=e_types,
             confidence_threshold=confidence_threshold,
+            access_context=access_context,
         )
 
         if not path_result:
@@ -264,7 +268,7 @@ async def traverse_graph(
     node_types: Optional[str] = Query(None, description="Comma-separated node types"),
     entity_types: Optional[str] = Query(None, description="Comma-separated entity types"),
     confidence_threshold: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum edge confidence"),
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     traversal_service: GraphTraversalService = Depends(get_graph_traversal_service),
 ):
     """
@@ -283,7 +287,7 @@ async def traverse_graph(
         e_types = parse_enum_list(entity_types, EntityType)
 
         traversal_result = await traversal_service.traverse(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             start_node_id=start_node_id,
             max_depth=max_depth,
             direction=direction,
@@ -291,6 +295,7 @@ async def traverse_graph(
             node_types=n_types,
             entity_types=e_types,
             confidence_threshold=confidence_threshold,
+            access_context=access_context,
         )
 
         return TraversalResponse(

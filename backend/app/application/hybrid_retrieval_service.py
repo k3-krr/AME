@@ -4,7 +4,7 @@ import abc
 import logging
 import uuid
 from typing import List, Optional
-from app.domain.entities import Memory
+from app.domain.entities import Memory, AccessContext
 from app.domain.memory_system import MemorySystem
 from app.domain.repositories import IRepositoryFactory
 
@@ -28,6 +28,7 @@ class HybridRetrievalService(metaclass=abc.ABCMeta):
         systems: Optional[List[MemorySystem]] = None,
         limit_per_system: int = 10,
         conversation_id: Optional[uuid.UUID] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         """
         Orchestrates retrieval across the specified hybrid memory systems.
@@ -60,26 +61,30 @@ class HybridRetrievalService(metaclass=abc.ABCMeta):
                     system_memories = await repo.retrieve_semantic(
                         user_id=user_id,
                         query_embedding=query_embedding,
-                        limit=limit_per_system
+                        limit=limit_per_system,
+                        access_context=access_context,
                     )
                 elif system == MemorySystem.EPISODIC:
                     # Episodic repository chronological retrieval
                     system_memories = await repo.retrieve_episodic(
                         user_id=user_id,
                         conversation_id=conversation_id,
-                        limit=limit_per_system
+                        limit=limit_per_system,
+                        access_context=access_context,
                     )
                 elif system == MemorySystem.PROCEDURAL:
                     # Procedural repository frequency workflow retrieval
                     system_memories = await repo.retrieve_procedural(
                         user_id=user_id,
-                        limit=limit_per_system
+                        limit=limit_per_system,
+                        access_context=access_context,
                     )
                 elif system == MemorySystem.WORKING:
                     # Working repository active session context retrieval
                     system_memories = await repo.retrieve_working(
                         user_id=user_id,
-                        conversation_id=conversation_id
+                        conversation_id=conversation_id,
+                        access_context=access_context,
                     )
 
                 results.extend(system_memories)

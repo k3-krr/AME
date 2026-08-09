@@ -1,7 +1,7 @@
 import uuid
 import asyncio
 from typing import List, Dict, Any, Optional
-from app.domain.entities import Memory
+from app.domain.entities import Memory, AccessContext
 from app.domain.repositories import IMemoryStateRepository, IMemoryEmbeddingRepository
 from app.domain.embedding import IEmbeddingProvider
 from app.application.hybrid_ranking_service import HybridRankingService
@@ -45,6 +45,7 @@ class RetrievalOrchestrator:
         conversation_id: Optional[uuid.UUID] = None,
         options: Optional[Dict[str, Any]] = None,
         tracker: Optional[RetrievalTelemetryTracker] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> GroundedContextPackage:
         is_local_tracker = False
         if not tracker:
@@ -56,7 +57,7 @@ class RetrievalOrchestrator:
         
         try:
             package = await asyncio.wait_for(
-                self._execute_retrieve(user_id, query, conversation_id, options, tracker),
+                self._execute_retrieve(user_id, query, conversation_id, options, tracker, access_context),
                 timeout=timeout_val
             )
             tracker.result_count = len(package.fused_elements)
@@ -84,7 +85,8 @@ class RetrievalOrchestrator:
         query: str,
         conversation_id: Optional[uuid.UUID] = None,
         options: Optional[Dict[str, Any]] = None,
-        tracker: Optional[RetrievalTelemetryTracker] = None
+        tracker: Optional[RetrievalTelemetryTracker] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> GroundedContextPackage:
         if not tracker:
             tracker = RetrievalTelemetryTracker()
@@ -117,6 +119,7 @@ class RetrievalOrchestrator:
                             subqueries=subqueries,
                             conversation_id=conversation_id,
                             limit=limit,
+                            access_context=access_context,
                         )
                         retrieval_results.extend(res)
                     except Exception:
@@ -144,6 +147,16 @@ class RetrievalOrchestrator:
             unique_memories_map[res.memory.id] = res.memory
             
         memories = list(unique_memories_map.values())
+        
+        # Defense-in-depth check
+        if access_context:
+            from app.domain.entities import MemoryStatus
+            for memory in memories:
+                if memory.user_id != access_context.tenant_id:
+                    raise ValueError("Security violation: Tenant boundary mismatch detected.")
+                if access_context.principal_type.value == "AGENT" and memory.status == MemoryStatus.DELETED:
+                    raise ValueError("Security violation: DELETED memory access attempted.")
+
         memory_ids = list(unique_memories_map.keys())
         
         # 5. Fetch associated state records for recency/access weight checks

@@ -105,7 +105,7 @@ async def test_api_retrieve_context_404_no_strategy(client: AsyncClient):
     from app.retrieval.dependencies import get_retrieval_orchestrator
     
     class MockFailureOrchestrator:
-        async def retrieve(self, user_id, query, conversation_id=None, options=None):
+        async def retrieve(self, user_id, query, conversation_id=None, options=None, access_context=None):
             raise StrategyNotFoundError("no valid retrieval strategy")
 
     app.dependency_overrides[get_retrieval_orchestrator] = lambda: MockFailureOrchestrator()
@@ -137,7 +137,7 @@ async def test_api_retrieve_context_success_with_override(client: AsyncClient):
     from app.retrieval.dependencies import get_retrieval_orchestrator
     
     class MockSuccessOrchestrator:
-        async def retrieve(self, user_id, query, conversation_id=None, options=None):
+        async def retrieve(self, user_id, query, conversation_id=None, options=None, access_context=None):
             return GroundedContextPackage(
                 request_id=uuid.uuid4(),
                 retrieved_memories=[],

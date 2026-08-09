@@ -30,6 +30,9 @@ from app.knowledge_graph.repositories.mappers.relationship_mapper import (
     mapping_to_domain,
     mapping_to_table,
 )
+from app.domain.entities import AccessContext, MemoryAuthorizationFilterSpec
+from app.infrastructure.repositories.sql_repos import apply_memory_auth_filter
+from datetime import datetime, timezone
 
 
 class SQLEntityRepository(IEntityRepository):
@@ -292,18 +295,26 @@ class SQLMemoryNodeMappingRepository(IMemoryNodeMappingRepository):
         )
         return [mapping_to_domain(r) for r in result.scalars().all()]
 
-    async def list_by_node(self, node_id: uuid.UUID) -> List[MemoryNodeMapping]:
-        result = await self.session.execute(
-            select(MemoryNodeMappingTable).where(MemoryNodeMappingTable.node_id == node_id)
-        )
+    async def list_by_node(self, node_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> List[MemoryNodeMapping]:
+        query = select(MemoryNodeMappingTable).where(MemoryNodeMappingTable.node_id == node_id)
+        if access_context:
+            from app.infrastructure.db.models import MemoryTable
+            query = query.join(MemoryTable, MemoryTable.id == MemoryNodeMappingTable.memory_id)
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        result = await self.session.execute(query)
         return [mapping_to_domain(r) for r in result.scalars().all()]
 
-    async def list_by_nodes(self, node_ids: List[uuid.UUID]) -> List[MemoryNodeMapping]:
+    async def list_by_nodes(self, node_ids: List[uuid.UUID], access_context: Optional[AccessContext] = None) -> List[MemoryNodeMapping]:
         if not node_ids:
             return []
-        result = await self.session.execute(
-            select(MemoryNodeMappingTable).where(MemoryNodeMappingTable.node_id.in_(node_ids))
-        )
+        query = select(MemoryNodeMappingTable).where(MemoryNodeMappingTable.node_id.in_(node_ids))
+        if access_context:
+            from app.infrastructure.db.models import MemoryTable
+            query = query.join(MemoryTable, MemoryTable.id == MemoryNodeMappingTable.memory_id)
+            spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+            query = apply_memory_auth_filter(query, spec)
+        result = await self.session.execute(query)
         return [mapping_to_domain(r) for r in result.scalars().all()]
 
     async def list_by_memories(self, memory_ids: List[uuid.UUID]) -> List[MemoryNodeMapping]:

@@ -20,6 +20,7 @@ from app.domain.entities import (
     AgentCredential,
     MemoryAccessGrant,
     MemoryAccessLevel,
+    AccessContext,
 )
 from app.domain.memory_system import MemorySystem
 from app.domain.embedding import MemoryEmbedding
@@ -130,13 +131,13 @@ class IMemoryRepository(abc.ABC):
     """Domain repository contract managing Memory records."""
 
     @abc.abstractmethod
-    async def get_by_id(self, memory_id: uuid.UUID) -> Optional[Memory]:
+    async def get_by_id(self, memory_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> Optional[Memory]:
         raise NotImplementedError()
 
-    async def get_by_ids(self, memory_ids: List[uuid.UUID]) -> List[Memory]:
+    async def get_by_ids(self, memory_ids: List[uuid.UUID], access_context: Optional[AccessContext] = None) -> List[Memory]:
         """Fetch memories in batch with default parallel lookup to keep mock compatibility."""
         import asyncio
-        tasks = [self.get_by_id(mid) for mid in memory_ids]
+        tasks = [self.get_by_id(mid, access_context=access_context) for mid in memory_ids]
         results = await asyncio.gather(*tasks)
         return [m for m in results if m is not None]
 
@@ -191,6 +192,7 @@ class IMemoryRepository(abc.ABC):
         limit: int = 20,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -205,6 +207,7 @@ class IMemoryRepository(abc.ABC):
         limit: int = 20,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -215,7 +218,7 @@ class IMemoryRepository(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    async def get_by_ids(self, memory_ids: list[uuid.UUID]) -> list[Memory]:
+    async def get_by_ids(self, memory_ids: list[uuid.UUID], access_context: Optional[AccessContext] = None) -> list[Memory]:
         """Retrieves memories by their IDs, preserving order where possible."""
         raise NotImplementedError()
 
@@ -224,11 +227,11 @@ class ISemanticMemoryRepository(IMemoryRepository):
     """Domain repository contract for Semantic memory system."""
 
     @abc.abstractmethod
-    async def list_semantic_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> list[Memory]:
+    async def list_semantic_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20, access_context: Optional[AccessContext] = None) -> list[Memory]:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    async def get_semantic_memories_by_type(self, user_id: uuid.UUID, memory_types: list[MemoryType]) -> list[Memory]:
+    async def get_semantic_memories_by_type(self, user_id: uuid.UUID, memory_types: list[MemoryType], access_context: Optional[AccessContext] = None) -> list[Memory]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -237,6 +240,7 @@ class ISemanticMemoryRepository(IMemoryRepository):
         user_id: uuid.UUID,
         query_embedding: Optional[list[float]] = None,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -252,6 +256,7 @@ class IEpisodicMemoryRepository(IMemoryRepository):
         end_time: Optional[datetime] = None,
         page: int = 1,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -261,6 +266,7 @@ class IEpisodicMemoryRepository(IMemoryRepository):
         conversation_id: uuid.UUID,
         page: int = 1,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -270,6 +276,7 @@ class IEpisodicMemoryRepository(IMemoryRepository):
         user_id: uuid.UUID,
         conversation_id: Optional[uuid.UUID] = None,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -278,7 +285,7 @@ class IProceduralMemoryRepository(IMemoryRepository):
     """Domain repository contract for Procedural memory system."""
 
     @abc.abstractmethod
-    async def get_procedural_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20) -> list[Memory]:
+    async def get_procedural_memories(self, user_id: uuid.UUID, page: int = 1, limit: int = 20, access_context: Optional[AccessContext] = None) -> list[Memory]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -286,6 +293,7 @@ class IProceduralMemoryRepository(IMemoryRepository):
         self,
         user_id: uuid.UUID,
         limit: int = 10,
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -294,6 +302,7 @@ class IProceduralMemoryRepository(IMemoryRepository):
         self,
         user_id: uuid.UUID,
         limit: int = 20,
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 
@@ -302,11 +311,11 @@ class IWorkingMemoryRepository(IMemoryRepository):
     """Domain repository contract for Working memory system."""
 
     @abc.abstractmethod
-    async def get_active_working_memories(self, user_id: uuid.UUID) -> list[Memory]:
+    async def get_active_working_memories(self, user_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> list[Memory]:
         raise NotImplementedError()
 
     @abc.abstractmethod
-    async def list_active_session_context(self, conversation_id: uuid.UUID) -> list[Memory]:
+    async def list_active_session_context(self, conversation_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> list[Memory]:
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -314,6 +323,7 @@ class IWorkingMemoryRepository(IMemoryRepository):
         self,
         user_id: uuid.UUID,
         conversation_id: Optional[uuid.UUID] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> list[Memory]:
         raise NotImplementedError()
 

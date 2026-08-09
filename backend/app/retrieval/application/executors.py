@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Optional, Dict, Any
-from app.domain.entities import Memory
+from app.domain.entities import Memory, AccessContext
 from app.domain.memory_system import MemorySystem
 from app.domain.repositories import IMemoryRepository
 from app.domain.embedding import IEmbeddingProvider
@@ -34,6 +34,7 @@ class HybridRetrievalExecutor(IRetrievalExecutor):
         subqueries: List[RetrievalQuery],
         conversation_id: Optional[uuid.UUID] = None,
         limit: int = 10,
+        access_context: Optional[AccessContext] = None,
     ) -> List[RetrievalResult]:
         system_map = {
             RetrievalCapability.SEMANTIC_SEARCH: MemorySystem.SEMANTIC,
@@ -56,6 +57,7 @@ class HybridRetrievalExecutor(IRetrievalExecutor):
                 systems=[target_system],
                 limit_per_system=limit,
                 conversation_id=conversation_id,
+                access_context=access_context,
             )
             
             for memory in memories:
@@ -95,6 +97,7 @@ class WorkingMemoryExecutor(IRetrievalExecutor):
         subqueries: List[RetrievalQuery],
         conversation_id: Optional[uuid.UUID] = None,
         limit: int = 10,
+        access_context: Optional[AccessContext] = None,
     ) -> List[RetrievalResult]:
         results: List[RetrievalResult] = []
         for subquery in subqueries:
@@ -109,6 +112,7 @@ class WorkingMemoryExecutor(IRetrievalExecutor):
                 systems=[MemorySystem.WORKING],
                 limit_per_system=limit,
                 conversation_id=conversation_id,
+                access_context=access_context,
             )
             for memory in memories:
                 results.append(
@@ -147,18 +151,29 @@ class GraphRetrievalExecutor(IRetrievalExecutor):
         subqueries: List[RetrievalQuery],
         conversation_id: Optional[uuid.UUID] = None,
         limit: int = 10,
+        access_context: Optional[AccessContext] = None,
     ) -> List[RetrievalResult]:
         results: List[RetrievalResult] = []
         for subquery in subqueries:
+            tenant_id = access_context.tenant_id if access_context else user_id
             canonical = normalize_canonical_name(subquery.query)
-            node = await self.graph_repo.entities.get_by_name(user_id, canonical)
+            node = await self.graph_repo.entities.get_by_name(tenant_id, canonical)
             
             if node:
                 mappings = await self.graph_repo.mappings.list_by_node(node.id)
-                memory_ids = [m.memory_id for m in mappings]
+                if access_context:
+                    auth_mappings = await self.graph_repo.mappings.list_by_node(node.id, access_context=access_context)
+                else:
+                    auth_mappings = mappings
+                    
+                # Prune if node maps exclusively to unauthorized memories
+                if mappings and not auth_mappings:
+                    continue
+                    
+                memory_ids = [m.memory_id for m in auth_mappings]
                 if memory_ids:
                     # Enforce the system page/limit limit for query retrieval safety
-                    memories = await self.memory_repo.get_by_ids(memory_ids[:limit])
+                    memories = await self.memory_repo.get_by_ids(memory_ids[:limit], access_context=access_context)
                     for memory in memories:
                         results.append(
                             RetrievalResult(

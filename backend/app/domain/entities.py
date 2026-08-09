@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 from app.domain.memory_system import MemorySystem, validate_memory_system_constraints
 
@@ -285,6 +285,57 @@ class MemoryAccessGrant:
             if expires_at <= current_time:
                 return False
         return True
+
+
+class MemoryAuthorizationFilterSpec:
+    """
+    Pure domain specification representing the unified memory authorization rules.
+    Decoupled from database frameworks, reusable across Python-side validation and SQL compilation.
+    """
+    def __init__(self, access_context: AccessContext, current_time: datetime):
+        self.access_context = access_context
+        self.current_time = current_time
+
+    @property
+    def tenant_id(self) -> uuid.UUID:
+        return self.access_context.tenant_id
+
+    @property
+    def is_agent(self) -> bool:
+        return self.access_context.principal_type == PrincipalType.AGENT
+
+    @property
+    def agent_id(self) -> Optional[uuid.UUID]:
+        return self.access_context.agent_id
+
+    def is_satisfied_by(self, memory: Memory, grants: List[MemoryAccessGrant]) -> bool:
+        # Enforce tenant boundary
+        if memory.user_id != self.tenant_id:
+            return False
+
+        # Human users have full access within their tenant boundary
+        if not self.is_agent:
+            return True
+
+        # Soft-deleted memories are hidden from agent access to prevent discovery
+        if memory.status == MemoryStatus.DELETED:
+            return False
+
+        # Agent owner check (creator has automatic MANAGE level)
+        if memory.agent_id == self.agent_id:
+            return True
+
+        # Lookup active grant
+        for grant in grants:
+            if grant.memory_id == memory.id and grant.agent_id == self.agent_id:
+                if grant.is_active(self.current_time) and grant.access_level in (
+                    MemoryAccessLevel.READ,
+                    MemoryAccessLevel.WRITE,
+                    MemoryAccessLevel.MANAGE,
+                ):
+                    return True
+        return False
+
 
 
 

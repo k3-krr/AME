@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from app.config import settings
 from app.knowledge_graph.domain.entities import Node, Relationship, RelationshipType, NodeType, EntityType
-from app.domain.entities import Memory
+from app.domain.entities import Memory, AccessContext
 from app.knowledge_graph.repositories.sql_repositories import SQLGraphRepository
 
 logger = logging.getLogger("ame_backend.knowledge_graph.expansion_service")
@@ -41,6 +41,7 @@ class KnowledgeGraphExpansionService:
         node_types: Optional[List[NodeType]] = None,
         relationship_types: Optional[List[RelationshipType]] = None,
         confidence_threshold: Optional[float] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> List[GraphExpansionCandidate]:
         """
         Accepts initial memories, traverses the graph, and yields expansion candidates.
@@ -126,20 +127,31 @@ class KnowledgeGraphExpansionService:
             for item in traversed:
                 all_traversed_node_ids.add(item["node"].id)
 
-        # Batch load mappings for all unique traversed target nodes
+        # Batch load mappings for all unique traversed target nodes (both all and authorized mappings)
         node_mappings_map: Dict[uuid.UUID, List[MemoryNodeMapping]] = {}
+        unauthorized_node_ids = set()
         if all_traversed_node_ids:
-            if hasattr(self.graph_repo.mappings, "list_by_nodes"):
-                mappings_resolved = await self.graph_repo.mappings.list_by_nodes(list(all_traversed_node_ids))
+            all_mappings = await self.graph_repo.mappings.list_by_nodes(list(all_traversed_node_ids))
+            
+            if access_context:
+                auth_mappings = await self.graph_repo.mappings.list_by_nodes(list(all_traversed_node_ids), access_context=access_context)
             else:
-                import asyncio
-                tasks = [self.graph_repo.mappings.list_by_node(nid) for nid in all_traversed_node_ids]
-                results = await asyncio.gather(*tasks)
-                mappings_resolved = []
-                for res in results:
-                    mappings_resolved.extend(res)
-
-            for mapping in mappings_resolved:
+                auth_mappings = all_mappings
+                
+            auth_memory_ids = {m.memory_id for m in auth_mappings}
+            
+            # Map node_id -> set of mapped memory_ids from all_mappings
+            node_to_memories: Dict[uuid.UUID, Set[uuid.UUID]] = {}
+            for m in all_mappings:
+                node_to_memories.setdefault(m.node_id, set()).add(m.memory_id)
+                
+            # Compile unauthorized node IDs: mapped memories exist, but NONE of them are authorized
+            for node_id, mapped_mids in node_to_memories.items():
+                if mapped_mids and not (mapped_mids & auth_memory_ids):
+                    unauthorized_node_ids.add(node_id)
+                    
+            # Populate node_mappings_map ONLY with authorized mappings so candidates are only created for authorized memories
+            for mapping in auth_mappings:
                 node_mappings_map.setdefault(mapping.node_id, []).append(mapping)
 
 
@@ -149,6 +161,10 @@ class KnowledgeGraphExpansionService:
                 target_node = item["node"]
                 t_depth = item["depth"]
                 path_node_ids = item["path"]
+
+                # Prune if any node in the traversal path is unauthorized
+                if access_context and any(nid in unauthorized_node_ids for nid in path_node_ids):
+                    continue
 
                 # Calculate graph path score with configurable decay
                 graph_score = origin_mapping_conf * (decay_factor ** t_depth)

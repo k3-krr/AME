@@ -27,6 +27,7 @@ async def test_graph_expansion_candidate_generation():
     # Node A (mapped to Memory 1) -> USES -> Node B (mapped to Memory 2) -> DEPENDS_ON -> Node C (mapped to Memory 3)
     # Start: Memory 1
     u_id = uuid.uuid4()
+    mem1_id = uuid.uuid4()
     n_a = Node(id=uuid.uuid4(), user_id=u_id, node_type=NodeType.ENTITY, name="Node A", canonical_name="node_a", entity_type=EntityType.PROJECT)
     n_b = Node(id=uuid.uuid4(), user_id=u_id, node_type=NodeType.ENTITY, name="Node B", canonical_name="node_b", entity_type=EntityType.FRAMEWORK)
     n_c = Node(id=uuid.uuid4(), user_id=u_id, node_type=NodeType.ENTITY, name="Node C", canonical_name="node_c", entity_type=EntityType.DATABASE)
@@ -40,10 +41,21 @@ async def test_graph_expansion_candidate_generation():
             class MockMappings:
                 async def list_by_memories(self, memory_ids):
                     # Memory 1 maps to Node A
-                    return [MemoryNodeMapping(memory_id=memory_ids[0], node_id=n_a.id, confidence=1.0)]
+                    return [MemoryNodeMapping(memory_id=mem1_id, node_id=n_a.id, confidence=1.0)]
+
+                async def list_by_nodes(self, node_ids, access_context=None):
+                    res = []
+                    for nid in node_ids:
+                        if nid == n_a.id:
+                            res.append(MemoryNodeMapping(memory_id=mem1_id, node_id=n_a.id, confidence=1.0))
+                        elif nid == n_b.id:
+                            res.append(MemoryNodeMapping(memory_id=uuid.UUID("11111111-1111-1111-1111-111111111111"), node_id=n_b.id, confidence=0.8))
+                        elif nid == n_c.id:
+                            res.append(MemoryNodeMapping(memory_id=uuid.UUID("22222222-2222-2222-2222-222222222222"), node_id=n_c.id, confidence=0.9))
+                    return res
 
                 async def list_by_node(self, node_id):
-                    # Node B maps to Memory 2, Node C maps to Memory 3
+                    # For compatibility
                     if node_id == n_b.id:
                         return [MemoryNodeMapping(memory_id=uuid.UUID("11111111-1111-1111-1111-111111111111"), node_id=n_b.id, confidence=0.8)]
                     if node_id == n_c.id:
@@ -64,7 +76,7 @@ async def test_graph_expansion_candidate_generation():
 
     # Mock initial memory list (Memory 1)
     mem1 = Memory(
-        id=uuid.uuid4(), user_id=u_id, conversation_id=None, content="Initial content",
+        id=mem1_id, user_id=u_id, conversation_id=None, content="Initial content",
         memory_type=MemoryType.FACT, importance=0.5, confidence=1.0, status=MemoryStatus.ACTIVE,
         created_at=datetime.utcnow(), updated_at=datetime.utcnow(), last_accessed_at=datetime.utcnow(),
         version=1, metadata={}, memory_system=MemorySystem.SEMANTIC
@@ -138,7 +150,7 @@ async def test_source_provenance_preservation():
             return [cand]
 
     class MockMemoryRepo:
-        async def get_by_ids(self, ids):
+        async def get_by_ids(self, ids, access_context=None):
             return [mem_initial]
 
     orchestrated_service = GraphAwareHybridRetrievalService(

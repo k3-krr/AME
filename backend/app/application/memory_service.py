@@ -437,6 +437,7 @@ class MemoryService:
         systems: Optional[List[MemorySystem]] = None,
         limit_per_system: int = 10,
         conversation_id: Optional[uuid.UUID] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         """
         Delegates hybrid memory search to the HybridRetrievalService.
@@ -461,6 +462,7 @@ class MemoryService:
             systems=systems,
             limit_per_system=limit_per_system,
             conversation_id=conversation_id,
+            access_context=access_context,
         )
 
         if not memories:

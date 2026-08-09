@@ -4,6 +4,7 @@ from enum import Enum
 from typing import List, Dict, Any, Optional
 
 from app.knowledge_graph.domain.entities import RelationshipType, NodeType, EntityType
+from app.domain.entities import AccessContext
 
 
 class TraversalStrategy(str, Enum):
@@ -32,6 +33,7 @@ class IGraphTraversalService(abc.ABC):
         node_types: Optional[List[NodeType]] = None,
         entity_types: Optional[List[EntityType]] = None,
         confidence_threshold: Optional[float] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> Dict[str, Any]:
         """Traverses the graph from a starting node, returning visited nodes and metadata."""
         raise NotImplementedError()
@@ -47,6 +49,7 @@ class IGraphTraversalService(abc.ABC):
         node_types: Optional[List[NodeType]] = None,
         entity_types: Optional[List[EntityType]] = None,
         confidence_threshold: Optional[float] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> Optional[Dict[str, Any]]:
         """Discovers the shortest path link chain connecting two node structures."""
         raise NotImplementedError()

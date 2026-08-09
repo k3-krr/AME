@@ -4,6 +4,7 @@ from typing import Optional, List, Tuple
 from datetime import datetime
 
 from app.knowledge_graph.domain.entities import Node, Relationship, MemoryNodeMapping, EntityType, RelationshipType
+from app.domain.entities import AccessContext
 
 
 class IEntityRepository(abc.ABC):
@@ -114,12 +115,12 @@ class IMemoryNodeMappingRepository(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    async def list_by_node(self, node_id: uuid.UUID) -> List[MemoryNodeMapping]:
+    async def list_by_node(self, node_id: uuid.UUID, access_context: Optional[AccessContext] = None) -> List[MemoryNodeMapping]:
         raise NotImplementedError()
 
-    async def list_by_nodes(self, node_ids: List[uuid.UUID]) -> List[MemoryNodeMapping]:
+    async def list_by_nodes(self, node_ids: List[uuid.UUID], access_context: Optional[AccessContext] = None) -> List[MemoryNodeMapping]:
         import asyncio
-        tasks = [self.list_by_node(nid) for nid in node_ids]
+        tasks = [self.list_by_node(nid, access_context=access_context) for nid in node_ids]
         results = await asyncio.gather(*tasks)
         flat_list = []
         for items in results:

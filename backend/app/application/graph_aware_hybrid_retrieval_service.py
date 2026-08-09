@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional, Union
 
 from app.config import settings
-from app.domain.entities import Memory
+from app.domain.entities import Memory, AccessContext
 from app.domain.memory_system import MemorySystem
 from app.domain.repositories import IMemoryRepository
 from app.application.hybrid_retrieval_service import HybridRetrievalService
@@ -36,6 +36,7 @@ class GraphAwareHybridRetrievalService:
         systems: Optional[List[MemorySystem]] = None,
         limit_per_system: int = 10,
         conversation_id: Optional[uuid.UUID] = None,
+        access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         """
         Retrieves baseline candidates from hybrid tiers, expands using Knowledge Graph,
@@ -48,6 +49,7 @@ class GraphAwareHybridRetrievalService:
             systems=systems,
             limit_per_system=limit_per_system,
             conversation_id=conversation_id,
+            access_context=access_context,
         )
 
         # 2. Check if Knowledge Graph expansion is enabled
@@ -59,6 +61,7 @@ class GraphAwareHybridRetrievalService:
             candidates = await self.expansion_service.expand_memories(
                 user_id=user_id,
                 memories=initial_memories,
+                access_context=access_context,
             )
             if not candidates:
                 return initial_memories
@@ -70,10 +73,11 @@ class GraphAwareHybridRetrievalService:
             target_ids = list(candidate_map.keys())
 
             # 4. Resolve actual Memory objects in batch to prevent N+1 queries
-            resolved_memories = await self.memory_repo.get_by_ids(target_ids)
+            resolved_memories = await self.memory_repo.get_by_ids(target_ids, access_context=access_context)
 
-            # Filter out memories not belonging to the user
-            resolved_memories = [m for m in resolved_memories if m.user_id == user_id]
+            # Filter out memories not belonging to the user/tenant boundary
+            tenant_id = access_context.tenant_id if access_context else user_id
+            resolved_memories = [m for m in resolved_memories if m.user_id == tenant_id]
 
             # 5. Merge and update metadata
             merged_results: List[Memory] = []

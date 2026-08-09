@@ -1,6 +1,7 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.presentation.api.auth import get_current_user
+from app.presentation.api.auth import get_current_user, get_access_context
+from app.domain.entities import AccessContext
 from app.infrastructure.db.models import UserTable
 from app.retrieval.api.schemas import (
     RetrievalRequestDto,
@@ -41,7 +42,7 @@ def validate_query_length(query: str) -> None:
 )
 async def retrieve_context(
     payload: RetrievalRequestDto,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     orchestrator: RetrievalOrchestrator = Depends(get_retrieval_orchestrator),
 ):
     """
@@ -50,10 +51,11 @@ async def retrieve_context(
     validate_query_length(payload.query)
     try:
         package = await orchestrator.retrieve(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             query=payload.query,
             conversation_id=payload.conversation_id,
             options=payload.options or {},
+            access_context=access_context,
         )
         return package
     except ValueError as e:
@@ -76,7 +78,7 @@ async def retrieve_context(
 )
 async def ground_retrieval(
     payload: RetrievalRequestDto,
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     retrieval_orchestrator: RetrievalOrchestrator = Depends(get_retrieval_orchestrator),
     grounding_service: GroundingService = Depends(get_grounding_service),
 ):
@@ -92,11 +94,12 @@ async def ground_retrieval(
     try:
         # 1. Run context retrieval E2E passing external tracker
         context_package = await retrieval_orchestrator.retrieve(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             query=payload.query,
             conversation_id=payload.conversation_id,
             options=payload.options or {},
             tracker=tracker,
+            access_context=access_context,
         )
         
         # 2. Extract options configurations

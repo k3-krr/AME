@@ -696,7 +696,7 @@ async def search_hybrid_memories(
     query: Optional[str] = Query(None, description="The hybrid search query keyword"),
     systems: Optional[str] = Query(None, description="Comma-separated tiers (semantic, episodic, procedural, working, all)"),
     conversation_id: Optional[uuid.UUID] = Query(None, description="Conversation context ID"),
-    current_user: UserTable = Depends(get_current_user),
+    access_context: AccessContext = Depends(get_access_context),
     memory_service: MemoryService = Depends(get_memory_service),
 ):
     """
@@ -721,10 +721,11 @@ async def search_hybrid_memories(
                         resolved_systems.append(system_mapping[tok])
 
         memories = await memory_service.search_hybrid_memories(
-            user_id=current_user.id,
+            user_id=access_context.tenant_id,
             query=query,
             systems=resolved_systems,
             conversation_id=conversation_id,
+            access_context=access_context,
         )
         return memories
     except Exception as e:

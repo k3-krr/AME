@@ -11,6 +11,7 @@ from app.domain.entities import (
     AccessContext,
     AgentStatus,
     MemoryStatus,
+    MemoryAuthorizationFilterSpec,
 )
 from app.domain.repositories import (
     IMemoryRepository,
@@ -52,33 +53,38 @@ class MemoryAuthorizationService:
         - Checks for active, unexpired MemoryAccessGrants for other agents.
         """
         # Strict tenant boundary check (cross-tenant isolation)
-        if memory.user_id != access_context.tenant_id:
+        spec = MemoryAuthorizationFilterSpec(access_context, datetime.now(timezone.utc))
+        if memory.user_id != spec.tenant_id:
             logger.warning(
                 f"Cross-tenant access attempted: context tenant {access_context.tenant_id} != memory tenant {memory.user_id}"
             )
             raise KeyError("Memory not found")
 
-        if access_context.principal_type == PrincipalType.USER:
+        if not spec.is_agent:
             # Human users have full MANAGE rights within their tenant
             return
 
-        if access_context.principal_type == PrincipalType.AGENT:
+        if spec.is_agent:
             # Soft-deleted memories are hidden from agent access to prevent discovery
             if memory.status == MemoryStatus.DELETED:
                 raise KeyError("Memory not found")
 
             # Verify agent status
-            agent = await self.agent_repo.get_by_id(access_context.agent_id)
+            agent = await self.agent_repo.get_by_id(spec.agent_id)
             if not agent or agent.status != AgentStatus.ACTIVE:
                 raise PermissionError("Access denied: agent is not active")
 
             # Agent owner check (creator has automatic MANAGE level)
-            if memory.agent_id == access_context.agent_id:
+            if memory.agent_id == spec.agent_id:
                 return
 
             # Lookup active grant
-            grant = await self.grant_repo.get_active_grant(memory.id, access_context.agent_id)
+            grant = await self.grant_repo.get_active_grant(memory.id, spec.agent_id)
             if not grant:
+                raise PermissionError("Access denied: no active grant found")
+
+            # Validate using the domain specification
+            if not spec.is_satisfied_by(memory, [grant]):
                 raise PermissionError("Access denied: no active grant found")
 
             # Validate permission hierarchy
