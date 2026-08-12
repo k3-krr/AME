@@ -72,6 +72,13 @@ class MemoryAuthorizationService:
             # Verify agent status
             agent = await self.agent_repo.get_by_id(spec.agent_id)
             if not agent or agent.status != AgentStatus.ACTIVE:
+                status_str = agent.status.value if agent else "NOT_FOUND"
+                import json
+                logger.warning(json.dumps({
+                    "event": "access_blocked_inactive_agent",
+                    "agent_id": str(spec.agent_id),
+                    "status": status_str
+                }))
                 raise PermissionError("Access denied: agent is not active")
 
             # Agent owner check (creator has automatic MANAGE level)
@@ -81,10 +88,22 @@ class MemoryAuthorizationService:
             # Lookup active grant
             grant = await self.grant_repo.get_active_grant(memory.id, spec.agent_id)
             if not grant:
+                import json
+                logger.warning(json.dumps({
+                    "event": "no_active_grant",
+                    "memory_id": str(memory.id),
+                    "agent_id": str(spec.agent_id)
+                }))
                 raise PermissionError("Access denied: no active grant found")
 
             # Validate using the domain specification
             if not spec.is_satisfied_by(memory, [grant]):
+                import json
+                logger.warning(json.dumps({
+                    "event": "no_active_grant",
+                    "memory_id": str(memory.id),
+                    "agent_id": str(spec.agent_id)
+                }))
                 raise PermissionError("Access denied: no active grant found")
 
             # Validate permission hierarchy
@@ -104,6 +123,14 @@ class MemoryAuthorizationService:
                 allowed = grant.access_level == MemoryAccessLevel.MANAGE
 
             if not allowed:
+                import json
+                logger.warning(json.dumps({
+                    "event": "insufficient_permission",
+                    "memory_id": str(memory.id),
+                    "agent_id": str(spec.agent_id),
+                    "required_level": required_level.value,
+                    "granted_level": grant.access_level.value
+                }))
                 raise PermissionError(
                     f"Access denied: insufficient permission level. Required: {required_level.value}, Granted: {grant.access_level.value}"
                 )
@@ -132,11 +159,11 @@ class MemoryAuthorizationService:
         # Enforce grantor has MANAGE permissions (this also checks tenant boundaries)
         await self.enforce_access(access_context, memory, MemoryAccessLevel.MANAGE)
 
-        # Enforce that the target agent belongs to the same tenant (reject cross-tenant grants safely)
+        # Enforce that the target agent belongs to the same tenant and is ACTIVE (reject cross-tenant/inactive grants safely)
         target_agent = await self.agent_repo.get_by_id(target_agent_id)
-        if not target_agent or target_agent.tenant_id != access_context.tenant_id:
+        if not target_agent or target_agent.tenant_id != access_context.tenant_id or target_agent.status != AgentStatus.ACTIVE:
             logger.warning(
-                f"Target agent {target_agent_id} not found or tenant mismatch with grantor tenant {access_context.tenant_id}"
+                f"Target agent {target_agent_id} not found, tenant mismatch, or not active with grantor tenant {access_context.tenant_id}"
             )
             raise KeyError("Agent not found")
 
@@ -152,6 +179,20 @@ class MemoryAuthorizationService:
 
         # Upsert grant
         existing = await self.grant_repo.get_by_memory_and_agent(memory_id, target_agent_id)
+        
+        import json
+        log_data = {
+            "event": "grant_created" if not existing else "grant_updated",
+            "memory_id": str(memory_id),
+            "target_agent_id": str(target_agent_id),
+            "granted_by_principal_type": granted_by_principal_type.value,
+            "granted_by_user_id": str(granted_by_user_id) if granted_by_user_id else None,
+            "granted_by_agent_id": str(granted_by_agent_id) if granted_by_agent_id else None,
+            "access_level": level.value,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        }
+        logger.info(json.dumps(log_data))
+
         if existing:
             existing.access_level = level
             existing.granted_by_principal_type = granted_by_principal_type
@@ -213,4 +254,16 @@ class MemoryAuthorizationService:
 
         # Mark revoked
         grant.revoked_at = datetime.now(timezone.utc)
+        
+        import json
+        log_data = {
+            "event": "grant_revoked",
+            "memory_id": str(memory_id),
+            "target_agent_id": str(target_agent_id),
+            "revoked_by_principal_type": access_context.principal_type.value,
+            "revoked_by_user_id": str(access_context.user_id) if access_context.user_id else None,
+            "revoked_by_agent_id": str(access_context.agent_id) if access_context.agent_id else None,
+        }
+        logger.info(json.dumps(log_data))
+
         return await self.grant_repo.save(grant)

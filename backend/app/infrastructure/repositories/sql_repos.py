@@ -71,7 +71,13 @@ def apply_memory_auth_filter(query, spec: MemoryAuthorizationFilterSpec):
         return query.where(MemoryTable.user_id == spec.tenant_id)
     else:
         from sqlalchemy.sql import exists
-        from app.infrastructure.db.models import MemoryAccessGrantTable
+        from app.infrastructure.db.models import MemoryAccessGrantTable, AgentTable
+        
+        # Enforce recipient (requesting agent) is active
+        recipient_active = exists().where(
+            AgentTable.id == spec.agent_id,
+            AgentTable.status == "ACTIVE"
+        )
         
         grant_exists = exists().where(
             MemoryAccessGrantTable.memory_id == MemoryTable.id,
@@ -83,6 +89,7 @@ def apply_memory_auth_filter(query, spec: MemoryAuthorizationFilterSpec):
         return query.where(
             MemoryTable.user_id == spec.tenant_id,
             MemoryTable.status != MemoryStatus.DELETED.value,
+            recipient_active,
             (
                 (MemoryTable.agent_id == spec.agent_id) |
                 grant_exists
