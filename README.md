@@ -91,3 +91,20 @@ ame-workspace/
    npm run dev
    ```
 5. Open [http://localhost:3000](http://localhost:3000) using a browser view.
+
+---
+
+## Milestone 10 — Multi-Agent Memory Platform
+
+Milestone 10 introduces the core backend framework to handle agent-aware security boundaries, cryptographic credentials, memory access grants, and collaboration rules.
+
+### 1. Architectural Design
+The multi-agent platform implements a strict cleanly separated architecture:
+* **Agent Principal Scope**: Every request is executed inside an `AccessContext` representing either a human `USER` or an `AGENT`.
+* **Cryptographic Keys**: Agents authenticate using high-entropy API keys (`Authorization: Bearer ame_agent_<key>`), which are validated by comparing their SHA-256 hashes against stored credentials.
+* **Controlled Access Control**: Automatic `MANAGE` access is given to the agent who created the memory. For all other agents, access level (`READ`, `WRITE`, `MANAGE`) is checked against unexpired, unrevoked `MemoryAccessGrant` database records.
+* **Database Filtration**: Domain rules are compiled into optimal database-level EXISTS subqueries (`apply_memory_auth_filter`) to prevent memory discovery leakage during semantic retrieval, hybrid retrieval, and Knowledge Graph traversals.
+
+### 2. Deployment Configurations
+* **CORS Settings**: The `CORS_ALLOWED_ORIGINS` environment variable dynamically configures the allowed client origins for API routes.
+* **Production Validation**: In production environments (`ENV=production` or `DEBUG=False`), the application enforces secure credential configurations by rejecting default insecure `JWT_SECRET_KEY` values and failing closed on startup.

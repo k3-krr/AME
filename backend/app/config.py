@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,7 @@ class AppSettings(BaseSettings):
     # Backend Ports & Gateway Configurations
     API_V1_PREFIX: str = "/api/v1"
     PROJECT_NAME: str = "Adaptive Memory Engine (AME)"
+    CORS_ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # Database Configuration settings
     # Default to a local postgres server name for local installations
@@ -125,6 +126,17 @@ class AppSettings(BaseSettings):
     RETRIEVAL_TIMEOUT_SECONDS: float = 5.0
     RETRIEVAL_MAX_QUERY_LENGTH: int = 1000
 
+
+    @model_validator(mode="after")
+    def validate_jwt_secret_safety(self) -> "AppSettings":
+        is_production = self.ENV.lower() == "production" or not self.DEBUG
+        default_secret = "secret-tokens-change-on-production-environments-310aefb"
+        if is_production and self.JWT_SECRET_KEY == default_secret:
+            raise ValueError(
+                "Production environment detected but default/insecure JWT_SECRET_KEY is being used. "
+                "The application cannot start under an insecure configuration."
+            )
+        return self
 
     # Settings config path mapping to .env file if available
     model_config = SettingsConfigDict(
