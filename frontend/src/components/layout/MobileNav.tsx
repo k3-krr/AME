@@ -11,10 +11,13 @@ import {
   Search, 
   Settings, 
   Cpu,
-  X
+  X,
+  LogOut
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
+import { useAuthStore } from "@/store/authStore";
+import { authApi } from "@/lib/api/auth";
 
 interface MobileNavProps {
   isOpen: boolean;
@@ -31,6 +34,7 @@ const PRIMARY_NAV = [
 
 export default function MobileNav({ isOpen, onClose }: MobileNavProps) {
   const pathname = usePathname();
+  const { email, logout } = useAuthStore();
 
   // Close the mobile drawer automatically when the pathname changes
   useEffect(() => {
@@ -50,6 +54,17 @@ export default function MobileNav({ isOpen, onClose }: MobileNavProps) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // Clean client state even if backend fails
+    } finally {
+      logout();
+      onClose();
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -130,7 +145,7 @@ export default function MobileNav({ isOpen, onClose }: MobileNavProps) {
                   className={cn(
                     "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200 outline-none border",
                     pathname === "/settings"
-                      ? "bg-zinc-900 text-zinc-50 border-zinc-800/60 shadow-sm"
+                      ? "bg-zinc-900 text-zinc-50 border border-zinc-800/60 shadow-sm"
                       : "text-zinc-400 hover:bg-zinc-900/40 hover:text-zinc-200 border-transparent"
                   )}
                 >
@@ -140,16 +155,27 @@ export default function MobileNav({ isOpen, onClose }: MobileNavProps) {
               </nav>
 
               {/* User profile item */}
-              <div className="flex items-center justify-between border-t border-zinc-800/60 pt-4 px-2">
-                <div className="flex items-center gap-3 overflow-hidden">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 border border-zinc-850 text-zinc-400 font-medium text-xs">
-                    U
+              <div className="flex items-center justify-between border-t border-zinc-805 pt-4 px-1.5 gap-2">
+                <div className="flex items-center gap-2.5 overflow-hidden">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 border border-zinc-805 text-zinc-300 font-medium text-xs uppercase">
+                    {email ? email[0] : "U"}
                   </div>
                   <div className="flex flex-col overflow-hidden">
                     <span className="text-xs font-semibold text-zinc-300 truncate leading-none">Account</span>
-                    <span className="text-[10px] text-zinc-500 font-mono truncate mt-1">Auth not connected</span>
+                    <span className="text-[9px] text-zinc-500 font-mono truncate mt-1" title={email || "user@ame.ai"}>
+                      {email || "user@ame.ai"}
+                    </span>
                   </div>
                 </div>
+
+                <button
+                  onClick={handleLogout}
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300 transition-colors cursor-pointer outline-none shrink-0"
+                  title="Log Out Session"
+                  aria-label="Logout user session"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
               </div>
             </div>
           </motion.div>

@@ -9,9 +9,12 @@ import {
   Bot, 
   Search, 
   Settings, 
-  Cpu
+  Cpu,
+  LogOut
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/store/authStore";
+import { authApi } from "@/lib/api/auth";
 
 interface NavigationItem {
   name: string;
@@ -29,6 +32,17 @@ const PRIMARY_NAV: NavigationItem[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { email, logout } = useAuthStore();
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // Clean client state even if backend fails
+    } finally {
+      logout();
+    }
+  };
 
   return (
     <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-zinc-950 border-r border-zinc-800/80 px-4 py-5 justify-between">
@@ -87,16 +101,27 @@ export default function Sidebar() {
         </nav>
 
         {/* User profile item */}
-        <div className="flex items-center justify-between border-t border-zinc-800/60 pt-4 px-2">
-          <div className="flex items-center gap-3 overflow-hidden">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 border border-zinc-850 text-zinc-400 font-medium text-xs">
-              U
+        <div className="flex items-center justify-between border-t border-zinc-805 pt-4 px-1.5 gap-2">
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium text-xs uppercase">
+              {email ? email[0] : "U"}
             </div>
             <div className="flex flex-col overflow-hidden">
               <span className="text-xs font-semibold text-zinc-300 truncate leading-none">Account</span>
-              <span className="text-[10px] text-zinc-500 font-mono truncate mt-1">Auth not connected</span>
+              <span className="text-[9px] text-zinc-500 font-mono truncate mt-1" title={email || "user@ame.ai"}>
+                {email || "user@ame.ai"}
+              </span>
             </div>
           </div>
+
+          <button
+            onClick={handleLogout}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300 transition-colors cursor-pointer outline-none shrink-0"
+            title="Log Out Session"
+            aria-label="Logout user session"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </aside>
