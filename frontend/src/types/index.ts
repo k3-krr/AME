@@ -187,4 +187,31 @@ export interface PathResponse {
   metadata: TraversalMetadata;
 }
 
+// --- Agent Types (Phase 5) ---
+
+export type AgentStatus = "ACTIVE" | "SUSPENDED" | "REVOKED";
+
+export interface Agent {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string | null;
+  status: AgentStatus;
+  configuration: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentCredential {
+  id: string;
+  agent_id: string;
+  description: string | null;
+  raw_key?: string | null;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+}
+
+
 
