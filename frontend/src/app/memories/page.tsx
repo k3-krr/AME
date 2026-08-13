@@ -119,9 +119,9 @@ export default function MemoriesPage() {
       loadMemories();
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(`API Error: ${err.message}`);
+        setErrorMsg(err.message);
       } else {
-        alert("Failed to submit memory to database.");
+        setErrorMsg("Failed to submit memory to database.");
       }
     } finally {
       setCreateSubmitting(false);

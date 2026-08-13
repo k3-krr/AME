@@ -61,7 +61,7 @@ export default function Sidebar() {
         {/* Primary Navigation */}
         <nav className="flex flex-col gap-1.5" aria-label="Primary Navigation">
           {PRIMARY_NAV.map((item) => {
-            const isActive = pathname === item.href;
+            const isActive = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             const Icon = item.icon;
             return (
               <Link

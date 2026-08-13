@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Agent } from "@/types";
 import { CreateAgentPayload } from "@/lib/api/agents";
 import { AlertCircle, HelpCircle } from "lucide-react";
@@ -24,6 +24,18 @@ export default function AgentFormDialog({
     initialData?.configuration ? JSON.stringify(initialData.configuration, null, 2) : "{}"
   );
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Handle escape keypress
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 

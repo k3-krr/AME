@@ -194,7 +194,7 @@ export default function Home() {
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2">
-            <span>Retrieval: <span className="text-emerald-500">Active</span></span>
+            <span>Retrieval: <span className="text-zinc-400">Ready</span></span>
           </div>
         </div>
 

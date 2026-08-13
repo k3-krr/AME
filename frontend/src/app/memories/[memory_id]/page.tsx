@@ -88,9 +88,9 @@ export default function MemoryDetailPage() {
       showActionSuccess("Memory updated successfully.");
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(`API Error: ${err.message}`);
+        setErrorMsg(err.message);
       } else {
-        alert("Failed to save changes.");
+        setErrorMsg("Failed to save changes.");
       }
     } finally {
       setEditSubmitting(false);
@@ -105,9 +105,9 @@ export default function MemoryDetailPage() {
       router.push("/memories");
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(`Delete failed: ${err.message}`);
+        setErrorMsg(`Delete failed: ${err.message}`);
       } else {
-        alert("Delete failed.");
+        setErrorMsg("Delete failed.");
       }
     } finally {
       setDeleteSubmitting(false);
@@ -123,7 +123,7 @@ export default function MemoryDetailPage() {
       setAnalytics(analData);
       showActionSuccess("Memory reinforced successfully.");
     } catch {
-      alert("Failed to reinforce memory.");
+      setErrorMsg("Failed to reinforce memory.");
     } finally {
       setReinforceLoading(false);
     }

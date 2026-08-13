@@ -1,5 +1,12 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler) {
+  unauthorizedHandler = handler;
+}
+
 export class ApiError extends Error {
   errorCode: string;
   details?: unknown;
@@ -30,6 +37,12 @@ export async function request<T>(
     headers,
     credentials: "include", // Essential for cross-origin HttpOnly cookies
   });
+
+  if (response.status === 401) {
+    if (unauthorizedHandler) {
+      unauthorizedHandler();
+    }
+  }
 
   if (response.status === 204) {
     return {} as T;

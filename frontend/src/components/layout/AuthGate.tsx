@@ -39,6 +39,20 @@ export default function AuthGate({ children }: AuthGateProps) {
     };
   }, [setContext, logout]);
 
+  // 2. Register generic API client session-expiry callback
+  useEffect(() => {
+    import("@/lib/api/client").then(({ setUnauthorizedHandler }) => {
+      setUnauthorizedHandler(() => {
+        logout();
+      });
+    });
+    return () => {
+      import("@/lib/api/client").then(({ setUnauthorizedHandler }) => {
+        setUnauthorizedHandler(() => {});
+      });
+    };
+  }, [logout]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !password.trim()) {

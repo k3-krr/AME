@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 
 interface DeleteConversationDialogProps {
@@ -13,6 +14,18 @@ export default function DeleteConversationDialog({
   onConfirm,
   isDeleting,
 }: DeleteConversationDialogProps) {
+  // Handle escape keypress
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
