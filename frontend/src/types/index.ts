@@ -106,3 +106,85 @@ export interface AccessContext {
   agent_id: string | null;
 }
 
+// --- Knowledge Graph Types (Phase 4) ---
+
+export type EntityType = 
+  | "PERSON"
+  | "ORGANIZATION"
+  | "PROJECT"
+  | "TECHNOLOGY"
+  | "FRAMEWORK"
+  | "DATABASE"
+  | "API"
+  | "DOCUMENT"
+  | "CUSTOM";
+
+export type RelationshipType =
+  | "USES"
+  | "DEPENDS_ON"
+  | "IMPLEMENTS"
+  | "REFERENCES"
+  | "RELATED_TO"
+  | "PART_OF"
+  | "CREATED_BY"
+  | "LOCATED_IN"
+  | "INDEXED_BY"
+  | "CUSTOM";
+
+export interface Entity {
+  id: string;
+  user_id: string;
+  name: string;
+  canonical_name: string;
+  entity_type: EntityType;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Relationship {
+  id: string;
+  user_id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  relationship_type: RelationshipType;
+  confidence: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface Neighbor {
+  node: Entity;
+  relationship: Relationship;
+  direction: "incoming" | "outgoing";
+}
+
+export interface TraversalNodeInfo {
+  node: Entity;
+  depth: number;
+}
+
+export interface TraversalMetadata {
+  traversal_strategy: string;
+  max_depth: number;
+  traversal_depth: number;
+  visited_node_count: number;
+  visited_relationship_count: number;
+  path_length: number | null;
+  execution_time_ms: number;
+  termination_reason: string;
+}
+
+export interface TraversalResponse {
+  nodes: TraversalNodeInfo[];
+  metadata: TraversalMetadata;
+}
+
+export interface PathResponse {
+  nodes: Entity[];
+  relationships: Relationship[];
+  hop_count: number;
+  metadata: TraversalMetadata;
+}
+
+
