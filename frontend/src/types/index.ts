@@ -213,5 +213,77 @@ export interface AgentCredential {
   last_used_at: string | null;
 }
 
+// --- Retrieval Types (Phase 6) ---
+
+export interface RetrievalRequest {
+  query: string;
+  conversation_id?: string | null;
+  options?: Record<string, unknown> | null;
+}
+
+export interface ContextElement {
+  memory_id: string;
+  content: string;
+  relevance_score: number;
+  source_tier: string;
+  provenance_metadata: Record<string, unknown>;
+}
+
+export interface GroundedContextPackage {
+  request_id: string;
+  fused_elements: ContextElement[];
+  metadata: Record<string, unknown>;
+  compiled_at: string;
+  status: string;
+}
+
+export interface RetrievalPlan {
+  intent: string;
+  recommended_capabilities: string[];
+  confidence: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface QueryAnalysisResult {
+  original_query: string;
+  normalized_query: string;
+  retrieval_plan: RetrievalPlan;
+}
+
+export interface RetrievalQuery {
+  query: string;
+  priority: number;
+  reason: string;
+  source: string;
+}
+
+export interface QueryRewriteResult {
+  original_query: string;
+  rewritten_query: string;
+  retrieval_queries: RetrievalQuery[];
+  metadata: Record<string, unknown>;
+}
+
+export interface Citation {
+  index: number;
+  memory_id: string;
+  source_tier: string;
+  content: string;
+  relevance_score: number;
+  originating_queries: string[];
+}
+
+export interface GroundedPromptPackage {
+  request_id: string;
+  user_query: string;
+  system_prompt: string;
+  formatted_context: string;
+  citations: Citation[];
+  grounding_metadata: Record<string, unknown>;
+  compiled_at: string;
+  status: string;
+}
+
+
 
 
