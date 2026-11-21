@@ -40,10 +40,10 @@ class MemoryExtractionService:
         messages = await self.message_repo.list_by_conversation(
             conversation_id=conversation_id, limit=10
         )
-        
+
         # Sort chronologically (oldest to newest)
         messages.sort(key=lambda m: m.created_at)
-        
+
         dialogue_turns = [
             {"role": m.sender_role, "content": m.content}
             for m in messages
@@ -119,14 +119,27 @@ class MemoryExtractionService:
                     target_memory_id=resolved_id
                 )
 
+            # 6. Update memory_status of processed pending messages
+            new_status = "consolidated" if candidates_to_log else "ignored"
+            for m in messages:
+                if m.memory_status == "pending":
+                    m.memory_status = new_status
+
+            await self.message_repo.session.flush()
             return extraction.id
 
         except Exception as e:
             logger.error(f"Autonomous extraction failed: {e}", exc_info=True)
+            # Fail closed: Set pending messages to ignored on failure so they don't hang as pending forever
+            for m in messages:
+                if m.memory_status == "pending":
+                    m.memory_status = "ignored"
+
             extraction = await self.extraction_repo.create_extraction(
                 conversation_id=conversation_id,
                 message_id=message_id,
                 status=ExtractionStatus.FAILED,
                 error_message=str(e)
             )
+            await self.message_repo.session.flush()
             return extraction.id

@@ -2,17 +2,17 @@
 
 import { useEffect, useState, useRef } from "react";
 import { Entity, Relationship, EntityType, PathResponse, TraversalResponse } from "@/types";
-import { 
-  ZoomIn, 
-  ZoomOut, 
-  Maximize2, 
-  RefreshCw, 
-  User, 
-  Building, 
-  FolderGit, 
-  Cpu, 
-  Database, 
-  FileCode, 
+import {
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  RefreshCw,
+  User,
+  Building,
+  FolderGit,
+  Cpu,
+  Database,
+  FileCode,
   HelpCircle,
   Link2,
   Share2
@@ -47,7 +47,7 @@ export default function GraphVisualizer({
   traversalResult
 }: GraphVisualizerProps) {
   const svgRef = useRef<SVGSVGElement>(null);
-  
+
   // Layout and zoom states
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -71,7 +71,7 @@ export default function GraphVisualizer({
 
   const getEntityColor = (type: EntityType, active: boolean, dimmed: boolean) => {
     if (dimmed) return "stroke-zinc-800 fill-zinc-900 text-zinc-700";
-    
+
     switch (type) {
       case "PERSON":
         return active ? "stroke-blue-400 fill-blue-950/80" : "stroke-blue-800 fill-blue-950/20";
@@ -115,7 +115,7 @@ export default function GraphVisualizer({
     }
 
     const currentPositions = { ...nodePositions.current };
-    
+
     // Seed new nodes dynamically in concentric structures
     entities.forEach((ent) => {
       if (!currentPositions[ent.id]) {
@@ -207,8 +207,9 @@ export default function GraphVisualizer({
 
       // Force 3: Center Gravity Pull & Friction damping updates
       nodes.forEach((n) => {
-        n.vx += (centerX - n.x) * 0.007;
-        n.vy += (centerY - n.y) * 0.007;
+        // Increased gravity so disconnected nodes don't spread excessively
+        n.vx += (centerX - n.x) * 0.015;
+        n.vy += (centerY - n.y) * 0.015;
 
         n.vx *= 0.72;
         n.vy *= 0.72;
@@ -242,7 +243,7 @@ export default function GraphVisualizer({
   const handleMouseDown = (e: React.MouseEvent) => {
     const target = e.target as SVGElement;
     const nodeId = target.getAttribute("data-node-id");
-    
+
     if (nodeId) {
       // Node dragging start
       draggedNodeId.current = nodeId;
@@ -285,8 +286,40 @@ export default function GraphVisualizer({
   };
 
   const handleResetLayout = () => {
-    setPan({ x: 0, y: 0 });
-    setZoom(1);
+    if (renderNodes.length === 0) {
+      setPan({ x: 0, y: 0 });
+      setZoom(1);
+      return;
+    }
+
+    // Calculate bounding box
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    renderNodes.forEach((n) => {
+      if (n.x < minX) minX = n.x;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.y > maxY) maxY = n.y;
+    });
+
+    const padding = 80;
+    const svgWidth = svgRef.current ? svgRef.current.clientWidth : 800;
+    const svgHeight = svgRef.current ? svgRef.current.clientHeight : 600;
+
+    const w = Math.max(maxX - minX, 1);
+    const h = Math.max(maxY - minY, 1);
+
+    const zoomX = (svgWidth - padding * 2) / w;
+    const zoomY = (svgHeight - padding * 2) / h;
+    const newZoom = Math.max(0.15, Math.min(zoomX, zoomY, 1.5));
+
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    const newPanX = (svgWidth / 2) - (cx * newZoom);
+    const newPanY = (svgHeight / 2) - (cy * newZoom);
+
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
     setLayoutTrigger((prev) => prev + 1); // Triggers recalculation ticks
   };
 
@@ -298,7 +331,7 @@ export default function GraphVisualizer({
 
   return (
     <div className="flex-1 min-h-[420px] bg-zinc-950 border border-zinc-900 rounded-xl relative overflow-hidden group">
-      
+
       {/* Absolute floating control bar */}
       <div className="absolute top-3 left-3 flex gap-1.5 z-10">
         <button
@@ -344,7 +377,7 @@ export default function GraphVisualizer({
       >
         {/* Render Graph Objects inside transform group */}
         <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-          
+
           {/* 1. Draw Relationship Lines (Edges) */}
           {relationships.map((rel) => {
             const src = nodesMap[rel.source_entity_id];
@@ -369,17 +402,17 @@ export default function GraphVisualizer({
                     markerHeight="6"
                     orient="auto-start-reverse"
                   >
-                    <path 
-                      d="M 0 1 L 10 5 L 0 9 z" 
+                    <path
+                      d="M 0 1 L 10 5 L 0 9 z"
                       className={cn(
-                        isPathEdge 
-                          ? "fill-amber-500" 
-                          : isSelectedEdge 
-                            ? "fill-zinc-400" 
-                            : isDimmed 
-                              ? "fill-zinc-900" 
+                        isPathEdge
+                          ? "fill-amber-500"
+                          : isSelectedEdge
+                            ? "fill-zinc-400"
+                            : isDimmed
+                              ? "fill-zinc-900"
                               : "fill-zinc-800"
-                      )} 
+                      )}
                     />
                   </marker>
                 </defs>
@@ -394,12 +427,12 @@ export default function GraphVisualizer({
                   markerEnd={`url(#arrow-${rel.id})`}
                   className={cn(
                     "transition-colors duration-200",
-                    isPathEdge 
-                      ? "stroke-amber-500 stroke-dasharray-[4,4] animate-pulse" 
-                      : isSelectedEdge 
-                        ? "stroke-zinc-550" 
-                        : isDimmed 
-                          ? "stroke-zinc-950" 
+                    isPathEdge
+                      ? "stroke-amber-500 stroke-dasharray-[4,4] animate-pulse"
+                      : isSelectedEdge
+                        ? "stroke-zinc-550"
+                        : isDimmed
+                          ? "stroke-zinc-950"
                           : "stroke-zinc-850"
                   )}
                 />
@@ -413,13 +446,13 @@ export default function GraphVisualizer({
             const isPathNode = pathNodeIds.has(node.id);
             const isTraversalNode = traversalNodeIds.has(node.id);
             const isDimmed = !!(shortestPath || traversalResult) && !isPathNode && !isTraversalNode;
-            
+
             const Icon = getEntityTypeIcon(node.type);
             const colorClass = getEntityColor(node.type, isActive || isPathNode || isTraversalNode, isDimmed);
 
             return (
               <g key={node.id} className="transition-transform duration-75">
-                
+
                 {/* Node Outer Selection Ring Glow */}
                 {(isActive || isPathNode) && (
                   <circle
@@ -437,12 +470,12 @@ export default function GraphVisualizer({
                 <circle
                   cx={node.x}
                   cy={node.y}
-                  r={18}
+                  r={isActive ? 22 : 18}
                   data-node-id={node.id}
                   className={cn(
                     "stroke-2 cursor-pointer transition-all duration-300",
                     colorClass,
-                    isActive ? "stroke-white scale-110" : isPathNode ? "stroke-amber-500" : ""
+                    isActive ? "stroke-white" : isPathNode ? "stroke-amber-500" : ""
                   )}
                 />
 
@@ -461,12 +494,12 @@ export default function GraphVisualizer({
                   textAnchor="middle"
                   className={cn(
                     "text-[9px] font-mono select-none pointer-events-none transition-opacity duration-200",
-                    isActive 
-                      ? "fill-zinc-100 font-semibold" 
-                      : isPathNode 
-                        ? "fill-amber-400 font-semibold" 
-                        : isDimmed 
-                          ? "fill-zinc-800" 
+                    isActive
+                      ? "fill-zinc-100 font-semibold"
+                      : isPathNode
+                        ? "fill-amber-400 font-semibold"
+                        : isDimmed
+                          ? "fill-zinc-800"
                           : "fill-zinc-450"
                   )}
                 >

@@ -11,6 +11,7 @@ class AppSettings(BaseSettings):
     # Environment Context
     ENV: str = "development"
     DEBUG: bool = True
+    TESTING: bool = False  # Set to true in test environments to suppress live network calls
 
     # Backend Ports & Gateway Configurations
     API_V1_PREFIX: str = "/api/v1"
@@ -20,7 +21,7 @@ class AppSettings(BaseSettings):
     # Database Configuration settings
     # Default to a local postgres server name for local installations
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ame"
-    
+
     # Synchronous DB URL needed by Alembic migrations configuration
     SYNC_DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/ame"
 
@@ -31,8 +32,17 @@ class AppSettings(BaseSettings):
 
     # Third Party Provider Keys
     OPENAI_API_KEY: Optional[str] = None
+    LLM_PROVIDER: str = "openrouter"
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
     LLM_MODEL: str = "gpt-4o"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
+
+    # OpenRouter Config
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_MODEL: str = "meta-llama/llama-3.1-8b-instruct"
+    OPENROUTER_SITE_URL: str = "http://localhost:3000"
+    OPENROUTER_APP_NAME: str = "AME"
 
     # Adaptive Memory Engine configuration parameters
     W_SEMANTIC: float = 0.40

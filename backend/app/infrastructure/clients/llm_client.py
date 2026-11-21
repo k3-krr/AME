@@ -1,3 +1,4 @@
+import os
 import json
 import uuid
 import asyncio
@@ -13,7 +14,7 @@ logger = logging.getLogger("ame_backend.llm_client")
 
 class LLMService(ILLMService):
     """
-    Infrastructure implementation of ILLMService interfacing with OpenAI or 
+    Infrastructure implementation of ILLMService interfacing with OpenAI or
     simulating a stream when key is not configured.
     """
 
@@ -22,11 +23,11 @@ class LLMService(ILLMService):
     ) -> AsyncGenerator[str, None]:
         """
         Generates a stream of responses from the LLM.
-        
+
         Args:
             system_prompt: The base system instruction.
             prompt_messages: List of prior messages formatted as {"role": "user"|"assistant", "content": "..."}.
-            
+
         Yields:
             Text tokens as they arrive.
         """
@@ -34,6 +35,38 @@ class LLMService(ILLMService):
         messages = [{"role": "system", "content": system_prompt}]
         for msg in prompt_messages:
             messages.append({"role": msg["role"], "content": msg["content"]})
+
+        if os.environ.get("TESTING", "").lower() in ("true", "1"):
+            logger.info("TESTING mode: using simulated LLM stream (no network call).")
+            async for chunk in self._generate_simulated_stream(messages):
+                yield chunk
+            return
+
+        provider = getattr(settings, "LLM_PROVIDER", "openai")
+
+        if provider == "ollama":
+            logger.info("Using local Ollama streaming service...")
+            try:
+                async for chunk in self._generate_ollama_stream(messages):
+                    yield chunk
+            except Exception as e:
+                logger.error(f"Error during Ollama stream generation: {e}")
+                logger.info("Falling back to local simulator due to API error...")
+                async for chunk in self._generate_simulated_stream(messages):
+                    yield chunk
+            return
+
+        elif provider == "openrouter":
+            logger.info("Using OpenRouter streaming service...")
+            try:
+                async for chunk in self._generate_openrouter_stream(messages):
+                    yield chunk
+            except Exception as e:
+                logger.error(f"Error during OpenRouter stream generation: {e}")
+                logger.info("Falling back to local simulator due to API error...")
+                async for chunk in self._generate_simulated_stream(messages):
+                    yield chunk
+            return
 
         api_key = settings.OPENAI_API_KEY
 
@@ -90,6 +123,99 @@ class LLMService(ILLMService):
                             data_json = json.loads(data_content)
                             delta = data_json["choices"][0]["delta"]
                             if "content" in delta:
+                                yield delta["content"]
+                        except Exception as e:
+                            logger.debug(f"Failed to parse stream chunk: {line} - Error: {e}")
+
+    async def _generate_ollama_stream(
+        self, messages: List[Dict[str, str]]
+    ) -> AsyncGenerator[str, None]:
+        """Queries local Ollama OpenAI-compatible endpoint and streams delta content chunks."""
+        headers = {
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.LLM_MODEL,
+            "messages": messages,
+            "stream": True,
+        }
+        url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1/chat/completions"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    raise RuntimeError(f"Ollama API error: {response.status_code} - {error_text.decode('utf-8')}")
+
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        data_content = line[6:]
+                        if data_content == "[DONE]":
+                            break
+                        try:
+                            data_json = json.loads(data_content)
+                            delta = data_json["choices"][0]["delta"]
+                            if "content" in delta:
+                                yield delta["content"]
+                        except Exception as e:
+                            logger.debug(f"Failed to parse stream chunk: {line} - Error: {e}")
+
+    async def _generate_openrouter_stream(
+        self, messages: List[Dict[str, str]]
+    ) -> AsyncGenerator[str, None]:
+        """Queries OpenRouter API and streams delta content chunks."""
+        api_key = settings.OPENROUTER_API_KEY
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY not configured")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if getattr(settings, "OPENROUTER_SITE_URL", None):
+            headers["HTTP-Referer"] = settings.OPENROUTER_SITE_URL
+        if getattr(settings, "OPENROUTER_APP_NAME", None):
+            headers["X-Title"] = settings.OPENROUTER_APP_NAME
+
+        payload = {
+            "model": settings.OPENROUTER_MODEL,
+            "messages": messages,
+            "stream": True,
+        }
+        base_url = getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        url = f"{base_url.rstrip('/')}/chat/completions"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json=payload,
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    raise RuntimeError(f"OpenRouter API error: {response.status_code} - {error_text.decode('utf-8')}")
+
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        data_content = line[6:]
+                        if data_content == "[DONE]":
+                            break
+                        try:
+                            data_json = json.loads(data_content)
+                            delta = data_json["choices"][0].get("delta", {})
+                            if "content" in delta and delta["content"] is not None:
                                 yield delta["content"]
                         except Exception as e:
                             logger.debug(f"Failed to parse stream chunk: {line} - Error: {e}")
@@ -154,6 +280,26 @@ class OpenAIExtractionProvider(IExtractionProvider):
     """
 
     async def extract_candidates(self, dialogue_turns: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        if os.environ.get("TESTING", "").lower() in ("true", "1"):
+            logger.info("TESTING mode: using simulated extraction (no network call).")
+            return self._simulate_extraction(dialogue_turns)
+
+        provider = getattr(settings, "LLM_PROVIDER", "openai")
+        if provider == "ollama":
+            logger.info("Calling Ollama for autonomous memory extraction...")
+            try:
+                return await self._extract_ollama(dialogue_turns)
+            except Exception as e:
+                logger.error(f"Ollama extraction failed: {e}", exc_info=True)
+                return self._simulate_extraction(dialogue_turns)
+        elif provider == "openrouter":
+            logger.info("Calling OpenRouter for autonomous memory extraction...")
+            try:
+                return await self._extract_openrouter(dialogue_turns)
+            except Exception as e:
+                logger.error(f"OpenRouter extraction failed: {e}", exc_info=True)
+                return self._simulate_extraction(dialogue_turns)
+
         api_key = settings.OPENAI_API_KEY
         if api_key and api_key != "your-openai-api-key-here":
             logger.info("Calling OpenAI for autonomous memory extraction...")
@@ -185,6 +331,68 @@ class OpenAIExtractionProvider(IExtractionProvider):
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
             parsed = json.loads(content)
+            return parsed.get("candidates", [])
+
+    async def _extract_ollama(self, dialogue_turns: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        headers = {
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Dialogue history turns to analyze:\n{json.dumps(dialogue_turns)}"}
+            ],
+            "response_format": {"type": "json_object"}
+        }
+        url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1/chat/completions"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Ollama API error: {resp.status_code} - {resp.text}")
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+            return parsed.get("candidates", [])
+
+    async def _extract_openrouter(self, dialogue_turns: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        api_key = settings.OPENROUTER_API_KEY
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY not configured")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if getattr(settings, "OPENROUTER_SITE_URL", None):
+            headers["HTTP-Referer"] = settings.OPENROUTER_SITE_URL
+        if getattr(settings, "OPENROUTER_APP_NAME", None):
+            headers["X-Title"] = settings.OPENROUTER_APP_NAME
+
+        payload = {
+            "model": settings.OPENROUTER_MODEL,
+            "messages": [
+                {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Dialogue history turns to analyze:\n{json.dumps(dialogue_turns)}"}
+            ],
+            # OpenRouter often supports response_format depending on model, but we skip it here to be safe across models
+            # and rely on system prompt instructions to return JSON.
+        }
+        base_url = getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        url = f"{base_url.rstrip('/')}/chat/completions"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                raise RuntimeError(f"OpenRouter API error: {resp.status_code} - {resp.text}")
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            # Clean up markdown formatting if present
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.endswith("```"):
+                content = content[:-3]
+            parsed = json.loads(content.strip())
             return parsed.get("candidates", [])
 
     def _simulate_extraction(self, dialogue_turns: List[Dict[str, str]]) -> List[Dict[str, Any]]:
@@ -237,6 +445,22 @@ class OpenAIExtractionProvider(IExtractionProvider):
     async def evaluate_relationship(
         self, candidate_content: str, existing_memories: List[Tuple[uuid.UUID, str]]
     ) -> Dict[str, Any]:
+        provider = getattr(settings, "LLM_PROVIDER", "openai")
+        if provider == "ollama":
+            logger.info("Calling Ollama to resolve duplicate relation...")
+            try:
+                return await self._evaluate_ollama(candidate_content, existing_memories)
+            except Exception as e:
+                logger.error(f"Ollama duplication evaluate failed: {e}", exc_info=True)
+                return self._simulate_evaluate(candidate_content, existing_memories)
+        elif provider == "openrouter":
+            logger.info("Calling OpenRouter to resolve duplicate relation...")
+            try:
+                return await self._evaluate_openrouter(candidate_content, existing_memories)
+            except Exception as e:
+                logger.error(f"OpenRouter duplication evaluate failed: {e}", exc_info=True)
+                return self._simulate_evaluate(candidate_content, existing_memories)
+
         api_key = settings.OPENAI_API_KEY
         if api_key and api_key != "your-openai-api-key-here":
             logger.info("Calling OpenAI to resolve duplicate relation...")
@@ -275,7 +499,90 @@ class OpenAIExtractionProvider(IExtractionProvider):
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
             parsed = json.loads(content)
-            
+
+            # Map target_id to UUID
+            target_id_str = parsed.get("target_id")
+            parsed["target_id"] = uuid.UUID(target_id_str) if target_id_str else None
+            return parsed
+
+    async def _evaluate_ollama(
+        self, candidate_content: str, existing_memories: List[Tuple[uuid.UUID, str]]
+    ) -> Dict[str, Any]:
+        headers = {
+            "Content-Type": "application/json",
+        }
+        memories_serialized = [{"id": str(mid), "content": text} for mid, text in existing_memories]
+        user_prompt = (
+            f"New Candidate Memory: \"{candidate_content}\"\n"
+            f"Existing Similar Memories:\n{json.dumps(memories_serialized)}"
+        )
+        payload = {
+            "model": settings.LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": RELATIONSHIP_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            "response_format": {"type": "json_object"}
+        }
+        url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1/chat/completions"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                raise RuntimeError(f"Ollama API error: {resp.status_code} - {resp.text}")
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+
+            # Map target_id to UUID
+            target_id_str = parsed.get("target_id")
+            parsed["target_id"] = uuid.UUID(target_id_str) if target_id_str else None
+            return parsed
+
+    async def _evaluate_openrouter(
+        self, candidate_content: str, existing_memories: List[Tuple[uuid.UUID, str]]
+    ) -> Dict[str, Any]:
+        api_key = settings.OPENROUTER_API_KEY
+        if not api_key:
+            raise RuntimeError("OPENROUTER_API_KEY not configured")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if getattr(settings, "OPENROUTER_SITE_URL", None):
+            headers["HTTP-Referer"] = settings.OPENROUTER_SITE_URL
+        if getattr(settings, "OPENROUTER_APP_NAME", None):
+            headers["X-Title"] = settings.OPENROUTER_APP_NAME
+
+        memories_serialized = [{"id": str(mid), "content": text} for mid, text in existing_memories]
+        user_prompt = (
+            f"New Candidate Memory: \"{candidate_content}\"\n"
+            f"Existing Similar Memories:\n{json.dumps(memories_serialized)}"
+        )
+        payload = {
+            "model": settings.OPENROUTER_MODEL,
+            "messages": [
+                {"role": "system", "content": RELATIONSHIP_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            # Skip response_format to ensure compatibility, relying on prompt
+        }
+        base_url = getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        url = f"{base_url.rstrip('/')}/chat/completions"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                raise RuntimeError(f"OpenRouter API error: {resp.status_code} - {resp.text}")
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            # Clean up markdown formatting if present
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.endswith("```"):
+                content = content[:-3]
+            parsed = json.loads(content.strip())
+
             # Map target_id to UUID
             target_id_str = parsed.get("target_id")
             parsed["target_id"] = uuid.UUID(target_id_str) if target_id_str else None

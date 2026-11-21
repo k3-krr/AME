@@ -1,7 +1,7 @@
 import uuid
 import asyncio
 from datetime import datetime, timezone
-from typing import AsyncGenerator, List, Optional, Any
+from typing import AsyncGenerator, List, Optional, Any, Callable
 import logging
 
 from app.domain.repositories import (
@@ -28,12 +28,14 @@ class ChatService:
         llm_service: ILLMService,
         memory_service: IMemoryService,
         memory_extraction_service: Optional[Any] = None,
+        session_factory: Optional[Callable] = None,
     ):
         self.conversation_repo = conversation_repo
         self.message_repo = message_repo
         self.llm_service = llm_service
         self.memory_service = memory_service
         self.memory_extraction_service = memory_extraction_service
+        self.session_factory = session_factory
 
     async def list_conversations(
         self, user_id: uuid.UUID, page: int, limit: int
@@ -179,15 +181,44 @@ class ChatService:
                 logger.info(f"Reinforced matched memories {last_retrieved} after successful delivery.")
 
             # 9. Autonomous Memory Extraction Trigger (Milestone 6)
-            # Schedule memory extraction in the background to avoid blocking dialogue streaming
-            if self.memory_extraction_service:
+            # Schedule memory extraction in the background using a fresh dedicated database session
+            if self.memory_extraction_service and self.session_factory:
                 asyncio.create_task(
-                    self.memory_extraction_service.extract_memories_from_turns(
+                    _run_background_extraction_task(
                         conversation_id=conversation.id,
-                        message_id=assistant_message.id
+                        message_id=assistant_message.id,
+                        session_factory=self.session_factory,
                     )
                 )
                 logger.info(f"Scheduled background autonomous memory extraction for conversation {conversation.id}")
         except Exception as db_err:
             logger.error(f"Failed to save assistant message stream contents: {db_err}")
             raise db_err
+
+
+async def _run_background_extraction_task(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    session_factory: Callable,
+) -> None:
+    """
+    Runs memory extraction using a fresh, independent AsyncSession context to prevent session closing conflicts.
+    The session_factory is injected at call time so the correct engine is used in both
+    production (async_session_maker) and tests (conftest async_session).
+    """
+    from app.application.orchestrator_factory import build_memory_graph_orchestrator
+
+    logger.info(f"Starting background memory extraction task for message {message_id} in conversation {conversation_id}")
+    async with session_factory() as db:
+        try:
+            orchestrator = build_memory_graph_orchestrator(db=db)
+
+            await orchestrator.extract_memories_from_turns(
+                conversation_id=conversation_id,
+                message_id=message_id
+            )
+            await db.commit()
+            logger.info(f"Successfully completed and committed background memory extraction for message {message_id}")
+        except Exception as e:
+            logger.error(f"Error in background memory extraction task: {e}", exc_info=True)
+            await db.rollback()

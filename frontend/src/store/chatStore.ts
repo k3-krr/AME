@@ -239,6 +239,51 @@ export const useChatStore = create<ChatState>((set, get) => ({
       );
       set({ messages: sortedRefreshed });
 
+      // Start non-blocking status polling if there are pending assistant messages
+      const hasPending = sortedRefreshed.some(
+        (m) => m.sender_role === "assistant" && m.memory_status === "pending"
+      );
+
+      if (hasPending) {
+        let attempts = 0;
+        const maxAttempts = 8; // ~16 seconds total limit
+        const pollInterval = 2000;
+
+        const pollStatus = async () => {
+          if (attempts >= maxAttempts) return;
+          if (get().activeConversationId !== activeId) return;
+
+          await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+          if (get().activeConversationId !== activeId) return;
+
+          try {
+            const latestMessages = await chatApi.listMessages(activeId);
+            const sorted = [...latestMessages].sort(
+              (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+
+            // Sync frontend messages with latest status
+            set({ messages: sorted });
+
+            const stillPending = sorted.some(
+              (m) => m.sender_role === "assistant" && m.memory_status === "pending"
+            );
+
+            if (stillPending) {
+              attempts++;
+              pollStatus();
+            }
+          } catch (pollErr) {
+            console.error("Failed to poll message memory status:", pollErr);
+          }
+        };
+
+        // Invoke asynchronously without blocking the main send flow completion
+        pollStatus();
+      }
+
+
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : "Failed to process stream response.";
       set({ error: errorMsg });

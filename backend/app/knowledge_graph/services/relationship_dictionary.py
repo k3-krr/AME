@@ -42,4 +42,11 @@ RELATIONSHIP_RULES = {
         (r"\bruns in\b", 0.95),
         (r"\brunning in\b", 0.95),
     ],
+    RelationshipType.RELATED_TO: [
+        (r"\blearning\b.*?\bwith\b", 0.85),
+        (r"\bworking on\b.*?\bwith\b", 0.85),
+        (r"\bintegrated with\b", 0.90),
+        (r"\bconnected to\b", 0.90),
+        (r"\bassociated with\b", 0.90),
+    ],
 }

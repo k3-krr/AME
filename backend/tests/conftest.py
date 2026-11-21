@@ -42,11 +42,17 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest.fixture
 async def client(db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncClient, None]:
     """Create an AsyncClient instance with overriden database dependencies."""
+    from app.presentation.api.chat import get_session_factory
+
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
+    def override_get_session_factory() -> sessionmaker:
+        return async_session
+
     app.dependency_overrides[get_db] = override_get_db
-    
+    app.dependency_overrides[get_session_factory] = override_get_session_factory
+
     # Setup ASGI transport for HTTPX client
     try:
         transport = httpx.ASGITransport(app=app)
@@ -58,5 +64,5 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncClient, 
         transport=transport, base_url="http://testserver"
     ) as ac:
         yield ac
-        
+
     app.dependency_overrides.clear()

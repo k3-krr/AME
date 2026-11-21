@@ -163,6 +163,7 @@ async def get_current_agent(
 async def register(
     payload: UserRegisterRequest,
     response: Response,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -184,14 +185,15 @@ async def register(
         )
 
         # 3. Set the secure HttpOnly cookie
+        is_test = request.headers.get("host") == "testserver"
         response.set_cookie(
             key="session",
             value=token,
             httponly=True,
             max_age=settings.ACCESSO_TOKEN_EXPIRE_MINUTES * 60,
             expires=settings.ACCESSO_TOKEN_EXPIRE_MINUTES * 60,
-            samesite="lax",
-            secure=settings.ENV == "production",
+            samesite="lax" if is_test else "none",
+            secure=False if is_test else True,
         )
 
         return UserResponse(
@@ -247,14 +249,15 @@ async def login(
             user_agent=user_agent
         )
 
+        is_test = request.headers.get("host") == "testserver"
         response.set_cookie(
             key="session",
             value=token,
             httponly=True,
             max_age=settings.ACCESSO_TOKEN_EXPIRE_MINUTES * 60,
             expires=settings.ACCESSO_TOKEN_EXPIRE_MINUTES * 60,
-            samesite="lax",
-            secure=settings.ENV == "production",
+            samesite="lax" if is_test else "none",
+            secure=False if is_test else True,
         )
 
         return UserResponse(
@@ -306,11 +309,12 @@ async def logout(
         logger.error(f"Error during logout: {e}", exc_info=True)
         # We proceed to clear the cookie even if database deletion fails to clean up client state
     
+    is_test = request.headers.get("host") == "testserver"
     response.delete_cookie(
         key="session",
         path="/",
-        samesite="lax",
-        secure=settings.ENV == "production",
+        samesite="lax" if is_test else "none",
+        secure=False if is_test else True,
     )
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

@@ -1,6 +1,6 @@
 import uuid
 import logging
-from typing import List, Optional
+from typing import List, Optional, Callable
 from fastapi import APIRouter, status, Query, Response, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,7 @@ from app.application.analytics_service import AnalyticsService
 from app.config import settings
 from app.infrastructure.clients.embedding_client import OpenAIEmbeddingProvider
 from app.infrastructure.clients.llm_client import LLMService, OpenAIExtractionProvider
+from app.infrastructure.db.session import async_session_maker
 from app.application.chat_service import ChatService
 from app.application.memory_service import MemoryService
 from app.application.duplicate_detection_service import DuplicateDetectionService
@@ -46,7 +47,15 @@ llm_service_impl = LLMService()
 embedding_provider_impl = OpenAIEmbeddingProvider()
 
 
-def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
+def get_session_factory() -> Callable:
+    """Dependency that provides the async session factory for background extraction tasks."""
+    return async_session_maker
+
+
+def get_chat_service(
+    db: AsyncSession = Depends(get_db),
+    session_factory: Callable = Depends(get_session_factory),
+) -> ChatService:
     """Dependency helper instantiating ChatService with standard database repositories."""
     conversation_repo = SQLConversationRepository(db)
     message_repo = SQLMessageRepository(db)
@@ -121,6 +130,7 @@ def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
         llm_service=llm_service_impl,
         memory_service=infra_memory_service,
         memory_extraction_service=memory_extraction_service,
+        session_factory=session_factory,
     )
 
 

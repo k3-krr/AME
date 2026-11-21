@@ -79,7 +79,7 @@ export const useKnowledgeGraphStore = create<KnowledgeGraphState>((set, get) => 
       // Load 100 entities and 200 relationships to show a rich visual local sub-graph neighborhood
       const [entitiesData, relationshipsData] = await Promise.all([
         knowledgeGraphApi.listEntities({ limit: 100 }),
-        knowledgeGraphApi.listRelationships({ limit: 200 }),
+        knowledgeGraphApi.listRelationships({ limit: 100 }),
       ]);
       set({ 
         entities: entitiesData, 

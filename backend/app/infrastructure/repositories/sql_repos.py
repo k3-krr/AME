@@ -540,7 +540,7 @@ class SQLSemanticMemoryRepository(SQLMemoryRepository, ISemanticMemoryRepository
         access_context: Optional[AccessContext] = None,
     ) -> List[Memory]:
         if query_embedding:
-            if self.session.bind.dialect.name == "sqlite":
+            if self.session.sync_session.get_bind().dialect.name == "sqlite":
                 query = (
                     select(MemoryEmbeddingTable)
                     .join(MemoryTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
@@ -830,7 +830,7 @@ class SQLMemoryEmbeddingRepository(IMemoryEmbeddingRepository):
         top_k: int = 5,
         memory_type: Optional[MemoryType] = None,
     ) -> list[tuple[uuid.UUID, float]]:
-        if self.session.bind.dialect.name == "sqlite":
+        if self.session.sync_session.get_bind().dialect.name == "sqlite":
             query = (
                 select(MemoryEmbeddingTable)
                 .join(MemoryTable, MemoryTable.id == MemoryEmbeddingTable.memory_id)
